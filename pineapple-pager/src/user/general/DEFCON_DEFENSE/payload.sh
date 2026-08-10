@@ -2,7 +2,7 @@
 # Title: DEFCON Defense
 # Description: Unified passive 2.4/5 GHz monitoring, alerting, evidence, and defensive-tool launcher.
 # Author: Henry Hu
-# Version: 2.8
+# Version: 3.0
 # Category: General
 
 PAYLOAD_ROOT="/root/payloads"
@@ -31,6 +31,10 @@ ALERT_STATE="$LOOT_DIR/alert_state.psv"
 WATCHED_APS="$LOOT_DIR/watched_aps.tsv"
 PCAP_DIR="${DEFCON_DEFENSE_PCAP_DIR:-/root/loot/pcap}"
 DEAUTH_EVENTS="${DEFCON_DEFENSE_DEAUTH_EVENTS:-/root/loot/defcon_sentry/events.log}"
+PCAP_LIB="${DEFCON_DEFENSE_PCAP_LIB:-$DIR/pcap_evidence_lib.sh}"
+if [ ! -f "$PCAP_LIB" ] && [ -f "$DIR/../../../../lib/pcap_evidence_lib.sh" ]; then
+  PCAP_LIB="$DIR/../../../../lib/pcap_evidence_lib.sh"
+fi
 
 # Fatigue-resistant defaults for a crowded venue.
 MONITOR_INTERVAL=15
@@ -45,13 +49,29 @@ if [ ! -f "$RF_LIB" ]; then
   ERROR_DIALOG "DEFCON Defense is incomplete:\nmissing rf_guard_lib.sh"
   exit 1
 fi
+if [ ! -f "$PCAP_LIB" ]; then
+  ERROR_DIALOG "DEFCON Defense is incomplete:\nmissing pcap_evidence_lib.sh"
+  exit 1
+fi
 # shellcheck source=/dev/null
 . "$RF_LIB"
+# shellcheck source=/dev/null
+. "$PCAP_LIB"
+PCAP_EVIDENCE_DIR="$LOOT_DIR"
+PCAP_EVIDENCE_PCAP_DIR="$PCAP_DIR"
+PCAP_EVIDENCE_INDEX="$LOOT_DIR/pcap_index.tsv"
+PCAP_EVIDENCE_STATE="$LOOT_DIR/pcap_capture.psv"
+PCAP_EVIDENCE_DEDUPE="$LOOT_DIR/pcap_dedupe.psv"
+PCAP_EVIDENCE_LOCK="$LOOT_DIR/.pcap_capture.lock"
+pcap_evidence_configure
 mkdir -p "$LOOT_DIR" "$PCAP_DIR"
 
 FOCUS_MONITOR_PID=""
 FOCUS_PCAP_ACTIVE=0
 FOCUS_SIGNAL_FILE=""
+FOCUS_CAPTURE_ID=""
+BACKGROUND_MONITOR_PID=""
+MONITOR_PAUSE_FILE="$LOOT_DIR/.background_monitor_pause"
 
 cleanup_focused_monitor() {
   if [ -n "$FOCUS_MONITOR_PID" ] && kill -0 "$FOCUS_MONITOR_PID" 2>/dev/null; then
@@ -59,19 +79,42 @@ cleanup_focused_monitor() {
     wait "$FOCUS_MONITOR_PID" 2>/dev/null || true
   fi
   FOCUS_MONITOR_PID=""
-  if [ "$FOCUS_PCAP_ACTIVE" = "1" ] && type WIFI_PCAP_STOP >/dev/null 2>&1; then
-    WIFI_PCAP_STOP >/dev/null 2>&1 || true
+  if [ "$FOCUS_PCAP_ACTIVE" = "1" ]; then
+    if [ -n "$FOCUS_CAPTURE_ID" ] && type pcap_evidence_finish >/dev/null 2>&1; then
+      if ! pcap_evidence_finish "$FOCUS_CAPTURE_ID" >/dev/null 2>&1; then
+        type WIFI_PCAP_STOP >/dev/null 2>&1 && WIFI_PCAP_STOP >/dev/null 2>&1 || true
+        pcap_evidence_lock_release
+      fi
+    elif type WIFI_PCAP_STOP >/dev/null 2>&1; then
+      WIFI_PCAP_STOP >/dev/null 2>&1 || true
+    fi
   fi
   FOCUS_PCAP_ACTIVE=0
+  FOCUS_CAPTURE_ID=""
   if type PINEAPPLE_EXAMINE_RESET >/dev/null 2>&1; then
     PINEAPPLE_EXAMINE_RESET >/dev/null 2>&1 || true
   fi
   [ -z "$FOCUS_SIGNAL_FILE" ] || rm -f "$FOCUS_SIGNAL_FILE"
   FOCUS_SIGNAL_FILE=""
+  rm -f "$MONITOR_PAUSE_FILE"
 }
-trap cleanup_focused_monitor EXIT
-trap 'cleanup_focused_monitor; exit 130' INT
-trap 'cleanup_focused_monitor; exit 143' TERM
+
+cleanup_background_monitor() {
+  if [ -n "$BACKGROUND_MONITOR_PID" ] && kill -0 "$BACKGROUND_MONITOR_PID" 2>/dev/null; then
+    kill "$BACKGROUND_MONITOR_PID" 2>/dev/null || true
+    wait "$BACKGROUND_MONITOR_PID" 2>/dev/null || true
+  fi
+  BACKGROUND_MONITOR_PID=""
+  rm -f "$MONITOR_PAUSE_FILE"
+}
+
+cleanup_defcon_defense() {
+  cleanup_focused_monitor
+  cleanup_background_monitor
+}
+trap cleanup_defcon_defense EXIT
+trap 'cleanup_defcon_defense; exit 130' INT
+trap 'cleanup_defcon_defense; exit 143' TERM
 
 wait_for_input_or_timeout() { # timeout_seconds
   # WAIT_FOR_INPUT ignores numeric arguments on Pager firmware and blocks until
@@ -144,7 +187,12 @@ set_recon_bands() {
 
 capture_snapshot() {
   local quiet="${1:-0}"
-  local tmp_json="$LOOT_DIR/.recon.json.$$" tmp_snapshot="$LOOT_DIR/.snapshot.tsv.$$"
+  # $$ is unchanged inside a Bash subshell, so it is not unique when the
+  # background monitor and foreground UI refresh at the same time. BASHPID and
+  # RANDOM keep both atomic staging paths independent.
+  local capture_token="${BASHPID:-$$}.${RANDOM:-0}"
+  local tmp_json="$LOOT_DIR/.recon.json.$capture_token"
+  local tmp_snapshot="$LOOT_DIR/.snapshot.tsv.$capture_token"
   mkdir -p "$LOOT_DIR"
   if ! type _pineap >/dev/null 2>&1; then
     if [ "$quiet" = "1" ]; then LOG yellow "PineAP Recon API is unavailable; retrying."; else ERROR_DIALOG "PineAP Recon API is unavailable."; fi
@@ -237,6 +285,7 @@ Create the baseline only after reviewing the area."
 alert_rf_finding() { # type bssid ssid channel freq signal band
   local event="$1" bssid="$2" ssid="$3" channel="$4"
   local freq="$5" signal="$6" band="$7" label="$1"
+  local severity="HIGH" capture_result="" capture_status="" capture_note=""
   case "$event" in
     TRUSTED_SSID_NEW_BSSID) label="POSSIBLE EVIL TWIN" ;;
     TRUSTED_BSSID_SSID_CHANGE) label="TRUSTED AP CHANGED SSID" ;;
@@ -244,23 +293,40 @@ alert_rf_finding() { # type bssid ssid channel freq signal band
     WATCHED_SSID_NEW_BSSID) label="WATCHED SSID NEW BSSID" ;;
     WATCHED_BSSID_SSID_CHANGE) label="WATCHED AP CHANGED SSID" ;;
     WATCHED_AP_CHANNEL_CHANGE) label="WATCHED AP CHANGED CHANNEL" ;;
-    NEW_BSSID) label="NEW PERSISTENT AP" ;;
+    NEW_BSSID) label="NEW PERSISTENT AP"; severity="REVIEW" ;;
   esac
   rf_append_finding "$FINDINGS" "$(date +%s)" "$event" "$bssid" "$ssid" "$channel" "$freq" "$signal" "$band"
+  if [ "$severity" = "HIGH" ]; then
+    capture_result="$(pcap_evidence_auto_start "$event" "$severity" "$ssid" "$bssid" \
+      "$band" "$channel" "$signal" 2>/dev/null || true)"
+    capture_status="${capture_result%%|*}"
+    case "$capture_status" in
+      CAPTURING) capture_note="PCAP: CAPTURING 00:${PCAP_EVIDENCE_DURATION:-30}" ;;
+      BUSY) capture_note="PCAP: another evidence capture is active" ;;
+      COOLDOWN) capture_note="PCAP: recent matching evidence already saved" ;;
+      STORAGE_LIMIT) capture_note="PCAP: skipped by storage safety reserve" ;;
+      *) capture_note="PCAP: unavailable; finding log preserved" ;;
+    esac
+  else
+    capture_note="PCAP: manual capture available after review"
+  fi
   RINGTONE --vibrate urgent >/dev/null 2>&1 &
   LED ATTACK >/dev/null 2>&1 || true
-  ALERT "$label
-SSID: $(rf_clean_field "$ssid")
+  ALERT "$severity THREAT
+$label
+Affected: $(rf_clean_field "$ssid")
 BSSID: $bssid
 Band/channel: $band / $channel
 Signal: ${signal} dBm
-Evidence: $FINDINGS"
+Time: $(date '+%H:%M:%S')
+$capture_note"
   LOG red "$label | $ssid | $bssid | $band ch $channel | ${signal} dBm"
+  LOG red "$capture_note"
 }
 
 analyze_snapshot() {
   local bssid ssid channel freq signal _seen_time _packets band event threshold should_alert
-  local alerts=0 observations=0 new_bssids_seen=""
+  local quiet="${1:-0}" alerts=0 observations=0 new_bssids_seen=""
   while IFS=$'\t' read -r bssid ssid channel freq signal _seen_time _packets band; do
     case "$band" in 2.4GHz|5GHz) ;; *) continue ;; esac
     observations=$((observations + 1))
@@ -286,7 +352,33 @@ analyze_snapshot() {
       alerts=$((alerts + 1))
     fi
   done < "$SNAPSHOT"
-  LOG "Observed $observations records; issued $alerts new alerts."
+  [ "$quiet" = "1" ] || LOG "Observed $observations records; issued $alerts new alerts."
+}
+
+background_monitor_loop() {
+  while true; do
+    if [ ! -f "$MONITOR_PAUSE_FILE" ] && capture_snapshot 1; then
+      analyze_snapshot 1
+    fi
+    sleep "$MONITOR_INTERVAL"
+  done
+}
+
+start_background_monitor() {
+  if [ -n "$BACKGROUND_MONITOR_PID" ] && kill -0 "$BACKGROUND_MONITOR_PID" 2>/dev/null; then
+    return 0
+  fi
+  rm -f "$MONITOR_PAUSE_FILE"
+  background_monitor_loop >/dev/null 2>&1 &
+  BACKGROUND_MONITOR_PID=$!
+}
+
+background_monitor_status() {
+  if [ -n "$BACKGROUND_MONITOR_PID" ] && kill -0 "$BACKGROUND_MONITOR_PID" 2>/dev/null; then
+    echo "ACTIVE"
+  else
+    echo "PAUSED"
+  fi
 }
 
 AP_BSSIDS=()
@@ -358,10 +450,11 @@ show_recon_target() { # index
 
 focused_live_monitor() { # bssid ssid band channel
   local bssid="$1" ssid="$2" band="$3" channel="$4"
-  local pcap="" button signal line_count=0 previous_count=0 samples=0
+  local pcap="" capture_result="" capture_status="" button signal line_count=0 previous_count=0 samples=0
   local indicator color label bar deauth_count last_deauth_count=0
   local focus_started focus_max_seconds=30
   FOCUS_SIGNAL_FILE="$LOOT_DIR/.focus-signal.$$"
+  : > "$MONITOR_PAUSE_FILE"
   : > "$FOCUS_SIGNAL_FILE"
 
   LOG " "
@@ -378,14 +471,20 @@ focused_live_monitor() { # bssid ssid band channel
     PINEAPPLE_EXAMINE_BSSID "$bssid" 3600 >/dev/null 2>&1 || \
       LOG yellow "Could not lock Recon to this BSSID; continuing on current Recon settings."
   fi
-  if type WIFI_PCAP_START >/dev/null 2>&1; then
-    pcap="$(WIFI_PCAP_START 2>/dev/null || true)"
-  fi
-  if [ -n "$pcap" ]; then
+  capture_result="$(pcap_evidence_manual_start "MANUAL_FOCUS" "INFO" "$ssid" "$bssid" \
+    "$band" "$channel" "?" 2>/dev/null || true)"
+  capture_status="${capture_result%%|*}"
+  if [ "$capture_status" = "CAPTURING" ]; then
+    FOCUS_CAPTURE_ID="$(printf '%s' "$capture_result" | cut -d '|' -f2)"
+    pcap="$(printf '%s' "$capture_result" | cut -d '|' -f3)"
     FOCUS_PCAP_ACTIVE=1
     LOG "PCAP evidence: $pcap"
   else
-    LOG yellow "PCAP capture unavailable; live signal monitoring continues."
+    case "$capture_status" in
+      BUSY) LOG yellow "PCAP busy: automatic evidence capture is already active." ;;
+      STORAGE_LIMIT) LOG yellow "PCAP skipped: storage safety reserve reached." ;;
+      *) LOG yellow "PCAP capture unavailable; live signal monitoring continues." ;;
+    esac
   fi
 
   _pineap MONITOR "$bssid" any rate=500 timeout=3600 > "$FOCUS_SIGNAL_FILE" 2>&1 &
@@ -583,19 +682,40 @@ threat_index_for_bssid() { # bssid
 }
 
 show_threat_target() { # index
-  local index="$1" indicator color label bar
+  local index="$1" indicator color label bar evidence_state evidence_color="yellow"
   indicator="$(signal_indicator "${THREAT_SIGNALS[$index]}")"
   color="${indicator%%|*}"; indicator="${indicator#*|}"
   label="${indicator%%|*}"; bar="${indicator#*|}"
+  evidence_state="$(pcap_evidence_state_for_bssid "${THREAT_BSSIDS[$index]}")"
+  case "$evidence_state" in CAPTURING*) evidence_color="red" ;; "EVIDENCE SAVED") evidence_color="green" ;; esac
   LOG " "
-  LOG red "THREAT ACTIVITY [$((index + 1))/$THREAT_COUNT] $(date '+%H:%M:%S')"
-  LOG "${THREAT_COLORS[$index]}" "${THREAT_REASONS[$index]}"
-  LOG green "$(printf '%s' "${THREAT_SSIDS[$index]}" | cut -c1-30)"
-  LOG "${THREAT_BSSIDS[$index]}"
-  LOG "$color" "Signal ${THREAT_SIGNALS[$index]} dBm $bar $label"
-  LOG "${THREAT_BANDS[$index]} ch ${THREAT_CHANNELS[$index]} | packets ${THREAT_PACKETS[$index]}"
-  LOG "UP/DOWN threat | A(GREEN) focus/capture"
-  LOG red "B (RED) = cancel/back"
+  LOG red "HIGH THREAT [$((index + 1))/$THREAT_COUNT] | $(date '+%H:%M:%S')"
+  LOG red "${THREAT_REASONS[$index]}"
+  LOG "AFFECTED: $(printf '%s' "${THREAT_SSIDS[$index]}" | cut -c1-30)"
+  LOG "$evidence_color" "EVIDENCE: $evidence_state"
+  LOG "${THREAT_BSSIDS[$index]} | ${THREAT_BANDS[$index]} ch${THREAT_CHANNELS[$index]}"
+  LOG "$color" "${THREAT_SIGNALS[$index]} dBm $bar $label | packets ${THREAT_PACKETS[$index]}"
+  LOG green "A investigate/capture | B back"
+  LOG cyan "LEFT/RIGHT details | UP/DOWN threat"
+}
+
+threat_detail_view() { # initial_index
+  local index="$1" button
+  [ "$THREAT_COUNT" -gt 0 ] || return 0
+  while true; do
+    show_threat_target "$index"
+    button="$(WAIT_FOR_INPUT || true)"
+    case "$button" in
+      A)
+        drain_button_queue
+        focused_live_monitor "${THREAT_BSSIDS[$index]}" "${THREAT_SSIDS[$index]}" \
+          "${THREAT_BANDS[$index]}" "${THREAT_CHANNELS[$index]}"
+        ;;
+      RIGHT|DOWN) index=$(( (index + 1) % THREAT_COUNT )) ;;
+      LEFT|UP) index=$(( (index + THREAT_COUNT - 1) % THREAT_COUNT )) ;;
+      B) return 0 ;;
+    esac
+  done
 }
 
 threat_activity_dashboard() {
@@ -668,11 +788,9 @@ threat_activity_dashboard() {
 }
 
 investigate_threats() {
-  local choice action index i reason_clean ssid_clean
+  local choice index i reason_clean ssid_clean
   local refresh_choice="Refresh threat activity"
   local back_choice="Back to DEFCON Defense"
-  local focus_choice="Focus live + save PCAP"
-  local list_back="Back to threat activity"
   local -a picker_options=()
 
   set_recon_bands || true
@@ -709,17 +827,176 @@ investigate_threats() {
     done
     [ -n "$index" ] || continue
 
-    ERROR_DIALOG "MALICIOUS TRAFFIC\n${THREAT_SSIDS[$index]}\n${THREAT_BSSIDS[$index]}\n${THREAT_BANDS[$index]} ch ${THREAT_CHANNELS[$index]} | ${THREAT_SIGNALS[$index]} dBm\n${THREAT_REASONS[$index]}"
-    action="$(LIST_PICKER "Threat response" "$focus_choice" "$list_back" \
-      "$back_choice" "$list_back")" || continue
+    drain_button_queue
+    threat_detail_view "$index"
+  done
+}
+
+PCAP_EPOCHS=()
+PCAP_IDS=()
+PCAP_EVENTS=()
+PCAP_SEVERITIES=()
+PCAP_SSIDS=()
+PCAP_BSSIDS=()
+PCAP_BANDS=()
+PCAP_CHANNELS=()
+PCAP_SIGNALS=()
+PCAP_DURATIONS=()
+PCAP_SIZES=()
+PCAP_HASHES=()
+PCAP_STATUSES=()
+PCAP_TRIGGERS=()
+PCAP_PATHS=()
+PCAP_COUNT=0
+
+pcap_event_label() { # event
+  case "$1" in
+    DEAUTH_ACTIVITY) echo "DEAUTH" ;;
+    TRUSTED_SSID_NEW_BSSID|WATCHED_SSID_NEW_BSSID) echo "EVIL TWIN" ;;
+    TRUSTED_BSSID_SSID_CHANGE|WATCHED_BSSID_SSID_CHANGE) echo "SSID CHANGE" ;;
+    TRUSTED_AP_CHANNEL_CHANGE|WATCHED_AP_CHANNEL_CHANGE) echo "CHANNEL CHANGE" ;;
+    MANUAL_FOCUS) echo "MANUAL FOCUS" ;;
+    LEGACY_CAPTURE) echo "LEGACY CAPTURE" ;;
+    *) printf '%s' "$1" | tr '_' ' ' | cut -c1-18 ;;
+  esac
+}
+
+pcap_event_time() { # epoch format
+  local epoch="$1" format="${2:-+%H:%M}"
+  date -d "@$epoch" "$format" 2>/dev/null || date -r "$epoch" "$format" 2>/dev/null || echo "$epoch"
+}
+
+load_pcap_evidence() {
+  local epoch id event severity ssid bssid band channel signal duration size hash status trigger path
+  PCAP_EPOCHS=(); PCAP_IDS=(); PCAP_EVENTS=(); PCAP_SEVERITIES=(); PCAP_SSIDS=()
+  PCAP_BSSIDS=(); PCAP_BANDS=(); PCAP_CHANNELS=(); PCAP_SIGNALS=(); PCAP_DURATIONS=()
+  PCAP_SIZES=(); PCAP_HASHES=(); PCAP_STATUSES=(); PCAP_TRIGGERS=(); PCAP_PATHS=()
+  pcap_evidence_import_existing
+  while IFS=$'\t' read -r epoch id event severity ssid bssid band channel signal duration size hash status trigger path; do
+    [ "$status" = "SAVED" ] || continue
+    PCAP_EPOCHS+=("$epoch"); PCAP_IDS+=("$id"); PCAP_EVENTS+=("$event")
+    PCAP_SEVERITIES+=("$severity"); PCAP_SSIDS+=("$ssid"); PCAP_BSSIDS+=("$bssid")
+    PCAP_BANDS+=("$band"); PCAP_CHANNELS+=("$channel"); PCAP_SIGNALS+=("$signal")
+    PCAP_DURATIONS+=("$duration"); PCAP_SIZES+=("$size"); PCAP_HASHES+=("$hash")
+    PCAP_STATUSES+=("$status"); PCAP_TRIGGERS+=("$trigger"); PCAP_PATHS+=("$path")
+  done < <(awk -F '\t' 'NR>1 && $13=="SAVED"' "$PCAP_EVIDENCE_INDEX" | sort -t $'\t' -k1,1nr | head -n 50)
+  PCAP_COUNT="${#PCAP_IDS[@]}"
+}
+
+show_pcap_detail() { # index
+  local index="$1" event_label timestamp hash_short
+  event_label="$(pcap_event_label "${PCAP_EVENTS[$index]}")"
+  timestamp="$(pcap_event_time "${PCAP_EPOCHS[$index]}" '+%Y-%m-%d %H:%M:%S')"
+  hash_short="$(printf '%s' "${PCAP_HASHES[$index]}" | cut -c1-20)"
+  PROMPT "EVIDENCE DETAIL
+
+Threat: $event_label (${PCAP_SEVERITIES[$index]})
+Network: ${PCAP_SSIDS[$index]}
+Time: $timestamp
+BSSID: ${PCAP_BSSIDS[$index]}
+Band/channel: ${PCAP_BANDS[$index]} / ${PCAP_CHANNELS[$index]}
+Signal: ${PCAP_SIGNALS[$index]} dBm
+Duration: ${PCAP_DURATIONS[$index]} sec
+Size: $(pcap_evidence_human_bytes "${PCAP_SIZES[$index]}")
+SHA-256: ${hash_short}...
+Status: ${PCAP_STATUSES[$index]}
+
+Download with Virtual Pager > Download Loot."
+}
+
+verify_pcap_hash() { # index
+  local index="$1" id path sha tmp
+  id="${PCAP_IDS[$index]}"; path="${PCAP_PATHS[$index]}"
+  case "$path" in
+    "$PCAP_DIR"/*) ;;
+    *) ERROR_DIALOG "Capture path is outside the managed PCAP folder."; return 1 ;;
+  esac
+  [ -f "$path" ] || { ERROR_DIALOG "The selected PCAP file is missing."; return 1; }
+  LOG cyan "VERIFYING PCAP SHA-256"
+  LOG "$(basename "$path")"
+  LOG "This can take time for a large capture."
+  sha="$(pcap_evidence_sha256 "$path")"
+  [ -n "$sha" ] || sha="unavailable"
+  tmp="${PCAP_EVIDENCE_INDEX}.tmp.$$"
+  awk -F '\t' -v OFS='\t' -v wanted="$id" -v digest="$sha" \
+    '$2==wanted {$12=digest} {print}' "$PCAP_EVIDENCE_INDEX" > "$tmp" && \
+    mv -f "$tmp" "$PCAP_EVIDENCE_INDEX"
+  PCAP_HASHES[$index]="$sha"
+  PROMPT "EVIDENCE VERIFIED\n\nSHA-256:\n$sha"
+}
+
+delete_pcap_evidence() { # index
+  local index="$1" id path tmp
+  id="${PCAP_IDS[$index]}"; path="${PCAP_PATHS[$index]}"
+  [ "$(CONFIRMATION_DIALOG "Delete this saved PCAP from the Pager?")" = "1" ] || return 0
+  case "$path" in
+    "$PCAP_DIR"/*) rm -f -- "$path" ;;
+    *) ERROR_DIALOG "Capture path is outside the managed PCAP folder."; return 1 ;;
+  esac
+  tmp="${PCAP_EVIDENCE_INDEX}.tmp.$$"
+  awk -F '\t' -v wanted="$id" 'NR==1 || $2!=wanted' "$PCAP_EVIDENCE_INDEX" > "$tmp" && \
+    mv -f "$tmp" "$PCAP_EVIDENCE_INDEX"
+  PROMPT "PCAP DELETED\n\nThe selected capture was removed from the Pager."
+}
+
+show_pcap_evidence() {
+  local choice action index i label time_text size_text ssid_text total_text capture_state evidence_title
+  local refresh_choice="Refresh evidence library" back_choice="Back to DEFCON Defense"
+  local details_choice="View evidence details" download_choice="Download instructions"
+  local verify_choice="Verify SHA-256" delete_choice="Delete selected PCAP" list_back="Back to evidence"
+  local -a picker_options=()
+  while true; do
+    load_pcap_evidence
+    total_text="$(pcap_evidence_human_bytes "$(pcap_evidence_total_bytes)")"
+    capture_state="$(pcap_evidence_state_status)"
+    if [ "${capture_state#CAPTURING}" != "$capture_state" ]; then
+      evidence_title="$capture_state | $PCAP_COUNT saved"
+    else
+      evidence_title="Evidence: $PCAP_COUNT PCAP | $total_text"
+    fi
+    if [ "$PCAP_COUNT" -eq 0 ]; then
+      choice="$(LIST_PICKER "$evidence_title" \
+        "$refresh_choice" "$back_choice" "$refresh_choice")" || return 0
+      drain_button_queue
+      [ "$choice" = "$back_choice" ] && return 0
+      continue
+    fi
+
+    picker_options=()
+    for ((i=0; i<PCAP_COUNT; i++)); do
+      time_text="$(pcap_event_time "${PCAP_EPOCHS[$i]}")"
+      label="$(pcap_event_label "${PCAP_EVENTS[$i]}")"
+      ssid_text="$(printf '%s' "${PCAP_SSIDS[$i]}" | cut -c1-16)"
+      size_text="$(pcap_evidence_human_bytes "${PCAP_SIZES[$i]}")"
+      picker_options+=("$time_text $label | $ssid_text | $size_text | SAVED")
+    done
+    picker_options+=("$refresh_choice" "$back_choice")
+    choice="$(LIST_PICKER "$evidence_title" \
+      "${picker_options[@]}" "${picker_options[0]}")" || return 0
+    drain_button_queue
+    [ "$choice" = "$back_choice" ] && return 0
+    [ "$choice" = "$refresh_choice" ] && continue
+    index=""
+    for ((i=0; i<PCAP_COUNT; i++)); do
+      [ "$choice" = "${picker_options[$i]}" ] && { index="$i"; break; }
+    done
+    [ -n "$index" ] || continue
+
+    action="$(LIST_PICKER "$(pcap_event_label "${PCAP_EVENTS[$index]}") evidence" \
+      "$details_choice" "$verify_choice" "$download_choice" "$delete_choice" "$list_back" "$details_choice")" || continue
     drain_button_queue
     case "$action" in
-      "$focus_choice")
-        drain_button_queue
-        focused_live_monitor "${THREAT_BSSIDS[$index]}" "${THREAT_SSIDS[$index]}" \
-          "${THREAT_BANDS[$index]}" "${THREAT_CHANNELS[$index]}"
-        ;;
-      "$back_choice") return 0 ;;
+      "$details_choice") show_pcap_detail "$index" ;;
+      "$verify_choice") verify_pcap_hash "$index" ;;
+      "$download_choice") PROMPT "DOWNLOAD PCAP EVIDENCE
+
+1. Open Virtual Pager at the Pager address.
+2. Choose Download Loot.
+3. Save and unzip the archive.
+4. Open the pcap folder.
+
+The evidence detail screen shows time, threat, network, size, and SHA-256." ;;
+      "$delete_choice") delete_pcap_evidence "$index" ;;
     esac
   done
 }
@@ -865,53 +1142,94 @@ launch_payload() {
   exec bash "$target"
 }
 
-# Host tests source the payload to exercise the same monitor/alert functions
-# without entering the interactive Pager menu.
+tools_and_setup_menu() {
+  local choice
+  local back_choice="Back to general screen"
+  while true; do
+    choice="$(LIST_PICKER "Tools & Setup" \
+      "Optional RF baseline" "Latest RF findings" "Hostile-RF checklist" \
+      "Start PORT Alert" "Start ICMP Alert" "Launch Find Hackers" \
+      "Launch Alien AP" "Test alert" "$back_choice" "Optional RF baseline")" || return 0
+    drain_button_queue
+    case "$choice" in
+      "Optional RF baseline") create_baseline ;;
+      "Latest RF findings") show_findings ;;
+      "Hostile-RF checklist") show_emergency_checklist ;;
+      "Start PORT Alert") launch_payload "$PAYLOAD_ROOT/user/general/PORT_ALERT/payload.sh" ;;
+      "Start ICMP Alert") launch_payload "$PAYLOAD_ROOT/user/general/ICMP_ALERT/payload.sh" ;;
+      "Launch Find Hackers") launch_payload "$PAYLOAD_ROOT/user/reconnaissance/find_hackers/payload.sh" ;;
+      "Launch Alien AP") launch_payload "$PAYLOAD_ROOT/user/reconnaissance/alien_ap/payload.sh" ;;
+      "Test alert")
+        RINGTONE --vibrate urgent >/dev/null 2>&1 &
+        ALERT "DEFCON Defense alert test\nSeverity: TEST\nEvidence: no PCAP created"
+        ;;
+      "$back_choice") return 0 ;;
+    esac
+  done
+}
+
+general_screen() {
+  local menu_choice live_item threat_item evidence_item watched_item monitor_item
+  local threat_text red_count pcap_count pcap_state watched_count title monitor_state
+  local tools_item="Tools & Setup" status_item="System Status" exit_item="Exit DEFCON Defense"
+  set_recon_bands || true
+  start_background_monitor
+  drain_button_queue
+  while true; do
+    red_count=0
+    if load_active_threats 1; then
+      local i
+      for ((i=0; i<THREAT_COUNT; i++)); do
+        [ "${THREAT_COLORS[$i]}" = "red" ] && red_count=$((red_count + 1))
+      done
+    fi
+    if [ "$red_count" -gt 0 ]; then threat_text="HIGH $red_count"; else threat_text="CLEAR"; fi
+    pcap_count="$(pcap_evidence_count)"
+    pcap_state="$(pcap_evidence_state_status)"
+    watched_count="$(rf_watch_count "$WATCHED_APS")"
+    monitor_state="$(background_monitor_status)"
+    live_item="Live RF | $monitor_state | $AP_COUNT AP"
+    threat_item="Threat Details | $threat_text"
+    if [ "$pcap_state" = "IDLE" ] || [ "$pcap_state" = "SAVED" ] || [ "$pcap_state" = "EMPTY" ]; then
+      evidence_item="PCAP Evidence | $pcap_count saved"
+    else
+      evidence_item="PCAP Evidence | $pcap_state"
+    fi
+    monitor_item="Monitoring Controls | $monitor_state"
+    watched_item="Watched Networks | $watched_count"
+    title="DEFCON Defense"
+
+    menu_choice="$(LIST_PICKER "$title" "$live_item" "$threat_item" "$evidence_item" \
+      "Browse Recon Networks" "Threat Activity Live" "$monitor_item" "$watched_item" \
+      "$tools_item" "$status_item" "$exit_item" "$live_item")" || exit 0
+    drain_button_queue
+    case "$menu_choice" in
+      "$live_item") live_rf_dashboard ;;
+      "$threat_item") investigate_threats ;;
+      "$evidence_item") show_pcap_evidence ;;
+      "Browse Recon Networks") live_recon_browser ;;
+      "Threat Activity Live") threat_activity_dashboard ;;
+      "$monitor_item")
+        if [ "$monitor_state" = "ACTIVE" ]; then
+          cleanup_background_monitor
+          PROMPT "MONITORING PAUSED\n\nAutomatic trusted/watched-network correlation is paused. Deauth Sentry remains an independent firmware alert hook."
+        else
+          start_background_monitor
+          PROMPT "MONITORING ACTIVE\n\nPassive 2.4/5 GHz correlation is running while DEFCON Defense is open."
+        fi
+        ;;
+      "$watched_item") show_watched_networks ;;
+      "$tools_item") tools_and_setup_menu ;;
+      "$status_item") show_status ;;
+      "$exit_item") exit 0 ;;
+    esac
+  done
+}
+
+# Host tests source the payload to exercise the same monitor/alert and UI
+# functions without entering the interactive Pager menu.
 if [ "${DEFCON_DEFENSE_SOURCE_ONLY:-0}" = "1" ]; then
   if [ "$0" = "${BASH_SOURCE[0]}" ]; then exit 0; else return 0; fi
 fi
 
-MAIN_ITEMS=(
-  "Live RF Traffic"
-  "Browse Recon Networks"
-  "Threat Activity Live"
-  "Investigate Threats"
-  "Start alert monitor"
-  "Monitored networks"
-  "Status"
-  "Optional baseline"
-  "Latest RF findings"
-  "Hostile-RF checklist"
-  "Start PORT Alert"
-  "Start ICMP Alert"
-  "Launch Find Hackers"
-  "Launch Alien AP"
-  "Test alert"
-  "Exit"
-)
-drain_button_queue
-while true; do
-  menu_choice="$(LIST_PICKER "DEFCON Defense" "${MAIN_ITEMS[@]}" "Live RF Traffic")" || exit 0
-  drain_button_queue
-  case "$menu_choice" in
-    "Live RF Traffic") live_rf_dashboard ;;
-    "Browse Recon Networks") live_recon_browser ;;
-    "Threat Activity Live") threat_activity_dashboard ;;
-    "Investigate Threats") investigate_threats ;;
-    "Start alert monitor") start_monitor ;;
-    "Monitored networks") show_watched_networks ;;
-    "Status") show_status ;;
-    "Optional baseline") create_baseline ;;
-    "Latest RF findings") show_findings ;;
-    "Hostile-RF checklist") show_emergency_checklist ;;
-    "Start PORT Alert") launch_payload "$PAYLOAD_ROOT/user/general/PORT_ALERT/payload.sh" ;;
-    "Start ICMP Alert") launch_payload "$PAYLOAD_ROOT/user/general/ICMP_ALERT/payload.sh" ;;
-    "Launch Find Hackers") launch_payload "$PAYLOAD_ROOT/user/reconnaissance/find_hackers/payload.sh" ;;
-    "Launch Alien AP") launch_payload "$PAYLOAD_ROOT/user/reconnaissance/alien_ap/payload.sh" ;;
-    "Test alert")
-      RINGTONE --vibrate urgent >/dev/null 2>&1 &
-      ALERT "DEFCON Defense alert test"
-      ;;
-    "Exit") exit 0 ;;
-  esac
-done
+general_screen

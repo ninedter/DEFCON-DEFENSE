@@ -2,7 +2,7 @@
 # Title: DEFCON Sentry - Repeat-Offense Deauth Alert
 # Description: Warns loudly only when the SAME attacker sustains a deauth/disassoc flood.
 # Author: Henry Hu
-# Version: 1.0
+# Version: 1.1
 # Category: Alerts
 #
 # Fires on the deauth_flood_detected event. Alerts when one offender
@@ -27,5 +27,13 @@ STATE_DIR="${STATE_DIR:-/root/loot/defcon_sentry}"
 DIR="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=/dev/null
 . "$DIR/pager_alert_lib.sh"
+PCAP_LIB="$DIR/pcap_evidence_lib.sh"
+if [ ! -f "$PCAP_LIB" ] && [ -f "$DIR/../../../lib/pcap_evidence_lib.sh" ]; then
+  PCAP_LIB="$DIR/../../../lib/pcap_evidence_lib.sh"
+fi
+if [ -f "$PCAP_LIB" ]; then
+  # shellcheck source=/dev/null
+  . "$PCAP_LIB"
+fi
 
 sentry_process_event

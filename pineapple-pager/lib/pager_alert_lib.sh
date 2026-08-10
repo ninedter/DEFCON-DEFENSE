@@ -139,8 +139,39 @@ sentry_process_event() {
 
   SENTRY_PENDING_ALERT=""
   with_lock "$lock" _sentry_update "$now" "$state_file" "$key" "$src" "$dst" "$ap" "$cli" "$targeted"
-  # fire the (possibly blocking) alert AFTER the lock releases
-  [ -n "$SENTRY_PENDING_ALERT" ] && alert_fire "$SENTRY_PENDING_ALERT"
+  # Start a short, passive evidence capture immediately after a confirmed red
+  # alert. The shared helper supplies cross-process locking, cooldown, and
+  # storage guards. Alert delivery never depends on capture availability.
+  if [ -n "$SENTRY_PENDING_ALERT" ]; then
+    local capture_result="UNAVAILABLE|||" capture_status capture_note
+    local capture_ssid="<unknown>" capture_band="?" capture_channel="?" capture_signal="?"
+    local recon_snapshot="${DEFCON_DEFENSE_SNAPSHOT:-/root/loot/defcon_defense/latest_snapshot.tsv}"
+    local recon_row=""
+    if [ -n "$ap" ] && [ -f "$recon_snapshot" ]; then
+      recon_row="$(awk -F '\t' -v wanted="$ap" 'toupper($1)==wanted {print; exit}' "$recon_snapshot")"
+      if [ -n "$recon_row" ]; then
+        capture_ssid="$(printf '%s' "$recon_row" | cut -f2)"
+        capture_channel="$(printf '%s' "$recon_row" | cut -f3)"
+        capture_signal="$(printf '%s' "$recon_row" | cut -f5)"
+        capture_band="$(printf '%s' "$recon_row" | cut -f8)"
+      fi
+    fi
+    if type pcap_evidence_auto_start >/dev/null 2>&1; then
+      capture_result="$(pcap_evidence_auto_start "DEAUTH_ACTIVITY" "HIGH" \
+        "$capture_ssid" "$ap" "$capture_band" "$capture_channel" "$capture_signal" \
+        2>/dev/null || true)"
+    fi
+    capture_status="${capture_result%%|*}"
+    case "$capture_status" in
+      CAPTURING) capture_note="PCAP: CAPTURING 00:${PCAP_EVIDENCE_DURATION:-30}" ;;
+      BUSY) capture_note="PCAP: another evidence capture is active" ;;
+      COOLDOWN) capture_note="PCAP: recent matching evidence already saved" ;;
+      STORAGE_LIMIT) capture_note="PCAP: skipped by storage safety reserve" ;;
+      *) capture_note="PCAP: unavailable; event log preserved" ;;
+    esac
+    alert_fire "$SENTRY_PENDING_ALERT
+$capture_note"
+  fi
   return 0
 }
 

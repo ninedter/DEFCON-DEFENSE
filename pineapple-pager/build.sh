@@ -7,6 +7,7 @@ SUB="${PAGER_PAYLOAD_LIBRARY:-$HERE/vendor/pager-payloads}"
 # mounted USB:  OUT=/Volumes/PAGER/root/payloads/library ./build.sh
 OUT="${OUT:-$HERE/library}"
 LIB="$HERE/lib/pager_alert_lib.sh"
+PCAP_LIB="$HERE/lib/pcap_evidence_lib.sh"
 
 [ -d "$SUB" ] || { echo "ERROR: curated Pager payload library not found at $SUB"; exit 1; }
 
@@ -20,9 +21,11 @@ cp -R "$HERE/src/deauth_flood_detected/defcon_sentry"           "$OUT/alerts/dea
 cp -R "$HERE/src/pineapple_client_connected/defcon_honeypot"    "$OUT/alerts/pineapple_client_connected/"
 cp "$LIB" "$OUT/alerts/deauth_flood_detected/defcon_sentry/pager_alert_lib.sh"
 cp "$LIB" "$OUT/alerts/pineapple_client_connected/defcon_honeypot/pager_alert_lib.sh"
+cp "$PCAP_LIB" "$OUT/alerts/deauth_flood_detected/defcon_sentry/pcap_evidence_lib.sh"
 
 # Visible on-device entry point for status and launching the curated tools.
 cp -R "$HERE/src/user/general/DEFCON_DEFENSE" "$OUT/user/general/"
+cp "$PCAP_LIB" "$OUT/user/general/DEFCON_DEFENSE/pcap_evidence_lib.sh"
 
 # Curated stock detectors (whole directories, verbatim).
 # Required core must exist; optional ones are best-effort — the community

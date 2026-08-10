@@ -58,4 +58,15 @@ export _ALERT_DENIAL_CLIENT_MAC_ADDRESS="AA:AA:AA:AA:AA:AA"   # src+ap empty und
 fire 6000
 assert_eq "$(alerts)" "1" "E: watched MAC alerts even when KEY_MODE fields empty"
 
+# Scenario F: a confirmed deauth alert starts the shared bounded PCAP pipeline
+# before the alert is presented.
+setup
+pcap_evidence_auto_start() { echo "CAPTURING|test-id|/tmp/test.pcap|7002"; }
+export _ALERT_DENIAL_SOURCE_MAC_ADDRESS="AA:BB:CC:00:00:07"
+export _ALERT_DENIAL_AP_MAC_ADDRESS="DE:AD:BE:EF:00:07"
+fire 7000; fire 7001; fire 7002
+assert_eq "$(alerts)" "1" "F: confirmed deauth still emits one alert"
+grep -q 'PCAP: CAPTURING' "$REC"; assert_rc "$?" "0" \
+  "F: confirmed deauth alert reports immediate PCAP capture"
+
 exit $FAIL

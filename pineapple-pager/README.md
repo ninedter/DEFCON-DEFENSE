@@ -8,8 +8,8 @@ a repeated same-offense**, stay quiet on ambient DEF CON noise.
 
 | Payload | Type | Warns you when… |
 |---|---|---|
-| `user/general/DEFCON_DEFENSE` | on-demand | provides one visible control point for live passive 2.4/5 GHz Recon, arrow-button network selection, signal/activity status, red threat indications, baseline-optional monitoring, trusted-network alerts, focused evidence capture, findings review, emergency guidance, and the four manual defensive tools |
-| `alerts/deauth_flood_detected/defcon_sentry` | auto (custom) | the **same** attacker sustains a deauth/disassoc flood (3 hits/2 min, 5 min cooldown; watched MACs escalate instantly) |
+| `user/general/DEFCON_DEFENSE` | on-demand | provides a three-part native Pager experience: a concise general monitoring screen, red high-threat details, and a browsable PCAP evidence library; it also supplies live passive 2.4/5 GHz Recon, background trusted/watched-network correlation, focused capture, setup, and defensive tools |
+| `alerts/deauth_flood_detected/defcon_sentry` | auto (custom) | the **same** attacker sustains a deauth/disassoc flood (3 hits/2 min, 5 min cooldown; watched MACs escalate instantly), then immediately starts a bounded passive PCAP when storage and concurrency guards allow |
 | `alerts/pineapple_client_connected/defcon_honeypot` | auto (custom) | a client joins **your decoy AP** (first sighting per client, dedup reconnects; flags randomized/private MACs — most modern phones use these, so it's expected, not alarming) |
 | `user/general/PORT_ALERT` | on-demand | someone port-scans the Pager (auto-hardens firewall 60s) |
 | `user/general/ICMP_ALERT` | on-demand | someone pings/traceroutes the Pager (blocks ICMP/UDP 60s) |
@@ -45,15 +45,23 @@ PMKID attacks, handshake capture/crack, captive portals, PineAP karma/rogue-AP.
 - **Always-on (no action needed once armed):** `defcon_sentry`, `defcon_honeypot`
   — they fire from the engine while you do anything else.
 - **Unified RF monitoring:** open `DEFCON_DEFENSE`; its native Pager lists use
-  UP/DOWN to move, green A to select, and red B to cancel/back. Choose **Live RF
-  Traffic** for a continuously refreshing AP/packet/signal dashboard. Choose
+  UP/DOWN to move, green A to select/open, red B to cancel/back, and LEFT/RIGHT
+  to move between threat details. The first viewport keeps **Live RF**,
+  **Threat Details**, and **PCAP Evidence** together, with monitoring/threat/
+  capture state in the labels. Passive trusted/watched-network correlation runs
+  in the background while the app is open and can be paused from **Monitoring
+  Controls**. Choose **Live RF Traffic** for a continuously refreshing
+  AP/packet/signal dashboard. Choose
   **Browse Recon Networks** to select an AP already visible in Recon, watch it,
   or start focused live signal monitoring plus a firmware-native passive PCAP.
   Open the separate **Threat Activity Live** page for continuous Recon
   correlation with malicious indicators rendered in red. Use **Investigate
   Threats** for the native arrow/A/B list and focused capture of one current
-  event. This keeps ordinary RF traffic separate from actionable indicators. Then
-  run **Start alert monitor**. A baseline is
+  event. A confirmed red alert begins a 30-second passive PCAP immediately when
+  no capture is active, the same threat is outside its five-minute capture
+  cooldown, and the storage safety reserve is healthy. The alert and detail
+  screens show `PCAP CAPTURING`, `EVIDENCE SAVED`, or the reason capture was
+  skipped. This keeps ordinary RF traffic separate from actionable indicators. A baseline is
   optional: selected and trusted-network mismatches work without one. When a
   reviewed baseline is present, persistent strong new BSSIDs are also detected.
 - **Walking the floor / feeling watched:** launch `find_hackers`, then `alien_ap`
@@ -85,7 +93,28 @@ threshold — see each payload's own comments/README.
 - `/root/loot/defcon_defense/watched_aps.tsv` — APs selected with the Pager arrows.
 - `/root/loot/defcon_defense/findings.tsv` — passive RF alerts and evidence.
 - `/root/loot/defcon_defense/latest_recon.json` — latest raw Recon snapshot.
+- `/root/loot/defcon_defense/pcap_index.tsv` — capture time, trigger, severity,
+  SSID/BSSID, band/channel, signal, duration, size, SHA-256 state, status, and path.
 - `/root/loot/pcap/` — firmware-native focused passive Recon captures.
+
+Open **PCAP Evidence** to browse saved captures by time, threat, network, size,
+and status. Open a row for full details; use **Verify SHA-256** when a digest is
+needed. Digesting is intentionally on demand so a large pre-existing PCAP does
+not delay the general screen. To retrieve captures
+later, open Virtual Pager, choose **Download Loot**, unzip the archive, and open
+the `pcap/` folder.
+
+Automatic PCAP capture is deliberately bounded and conservative:
+
+- only confirmed red/high-confidence alerts trigger it; optional-baseline
+  `NEW_BSSID` review items do not;
+- one capture can run at a time;
+- matching event/BSSID captures cool down for five minutes;
+- each automatic capture stops after 30 seconds;
+- automatic capture stops before 256 MB of managed PCAP data or 64 MB of free
+  device storage is crossed; and
+- no capture is automatically deleted. The evidence browser requires explicit
+  confirmation before removing a selected file.
 
 `events.log`, `honeypot.csv`, and `findings.tsv` are append-only and grow over a
 multi-day event — clear them periodically if device storage is tight.
