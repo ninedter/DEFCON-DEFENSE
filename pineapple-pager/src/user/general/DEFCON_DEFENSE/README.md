@@ -4,7 +4,7 @@ The single visible Pager entry point for the defensive payload package. It
 combines passive 2.4/5 GHz monitoring, local alerting, evidence review, and the
 curated manual tools in one menu.
 
-Open it from **Payloads > General > DEFCON Defense**. Version 4.0 runs a
+Open it from **Payloads > General > DEFCON Defense**. Version 4.2 runs a
 dedicated full-screen MIPS application that reproduces the three designed
 480x222 Pager interfaces:
 

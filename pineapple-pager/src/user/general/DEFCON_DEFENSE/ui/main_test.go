@@ -2,8 +2,24 @@ package main
 
 import (
 	"image"
+	"io"
 	"testing"
 )
+
+type countingWriteSeeker struct {
+	writes int
+}
+
+func (w *countingWriteSeeker) Write(p []byte) (int, error) {
+	w.writes++
+	return len(p), nil
+}
+
+func (w *countingWriteSeeker) Seek(int64, int) (int64, error) {
+	return 0, nil
+}
+
+var _ io.WriteSeeker = (*countingWriteSeeker)(nil)
 
 func TestCanvasToFramebufferRotationAndRGB565(t *testing.T) {
 	img := image.NewRGBA(image.Rect(0, 0, screenWidth, screenHeight))
@@ -49,5 +65,33 @@ func TestNormalizeButton(t *testing.T) {
 		if got := normalizeButton(input); got != want {
 			t.Fatalf("normalizeButton(%q) = %q, want %q", input, got, want)
 		}
+	}
+}
+
+func TestUpdateDisplaySkipsIdenticalFrames(t *testing.T) {
+	a := &app{renderer: newRenderer("")}
+	state := previewState()
+	writer := &countingWriteSeeker{}
+	var pixels []byte
+
+	if err := a.updateDisplay(writer, state, &pixels); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.updateDisplay(writer, state, &pixels); err != nil {
+		t.Fatal(err)
+	}
+	if writer.writes != 1 {
+		t.Fatalf("identical frames wrote %d times, want 1", writer.writes)
+	}
+	if a.webRevision != 1 {
+		t.Fatalf("identical frames published %d revisions, want 1", a.webRevision)
+	}
+
+	a.screen = screenThreat
+	if err := a.updateDisplay(writer, state, &pixels); err != nil {
+		t.Fatal(err)
+	}
+	if writer.writes != 2 || a.webRevision != 2 {
+		t.Fatalf("changed frame writes/revisions = %d/%d, want 2/2", writer.writes, a.webRevision)
 	}
 }

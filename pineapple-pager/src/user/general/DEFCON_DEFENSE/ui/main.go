@@ -110,6 +110,9 @@ type app struct {
 	renderer                               *renderer
 	webMu                                  sync.RWMutex
 	webPNG                                 []byte
+	webETag                                string
+	webRevision                            uint64
+	webUpdated                             chan struct{}
 
 	mu               sync.Mutex
 	screen           screenKind
@@ -126,7 +129,7 @@ type app struct {
 
 func main() {
 	var materialPath string
-	a := &app{}
+	a := &app{webUpdated: make(chan struct{})}
 	flag.StringVar(&a.dataDir, "data-dir", "/root/loot/defcon_defense", "DEFCON Defense state directory")
 	flag.StringVar(&a.pcapDir, "pcap-dir", "/root/loot/pcap", "managed PCAP directory")
 	flag.StringVar(&a.actionFile, "action-file", "", "action queue file")
@@ -226,15 +229,16 @@ func (a *app) run() error {
 	buttons := make(chan string, 4)
 	go readButtons(ctx, buttons)
 
-	writeTicker := time.NewTicker(120 * time.Millisecond)
 	stateTicker := time.NewTicker(time.Second)
-	defer writeTicker.Stop()
 	defer stateTicker.Stop()
 
 	state := a.loadState()
-	canvas := a.render(state)
-	a.publishPNG(canvas)
-	frame := canvasToFramebuffer(canvas)
+	stateFingerprint := a.stateFingerprint()
+	displayedMinute := state.Now.Format("15:04")
+	var displayedPixels []byte
+	if err := a.updateDisplay(fb, state, &displayedPixels); err != nil {
+		return err
+	}
 	for {
 		select {
 		case <-ctx.Done():
@@ -243,33 +247,98 @@ func (a *app) run() error {
 			if a.handleButton(button, state) {
 				return nil
 			}
-			state = a.loadState()
-			canvas = a.render(state)
-			a.publishPNG(canvas)
-			frame = canvasToFramebuffer(canvas)
-		case <-stateTicker.C:
-			state = a.loadState()
-			canvas = a.render(state)
-			a.publishPNG(canvas)
-			frame = canvasToFramebuffer(canvas)
-		case <-writeTicker.C:
-			if _, err := fb.Seek(0, io.SeekStart); err != nil {
-				return fmt.Errorf("seek framebuffer: %w", err)
+			if err := a.updateDisplay(fb, state, &displayedPixels); err != nil {
+				return err
 			}
-			if _, err := fb.Write(frame); err != nil {
-				return fmt.Errorf("write framebuffer: %w", err)
+		case <-stateTicker.C:
+			now := time.Now()
+			nextFingerprint := a.stateFingerprint()
+			minuteChanged := now.Format("15:04") != displayedMinute
+			stateChanged := nextFingerprint != stateFingerprint
+			if stateChanged || minuteChanged {
+				state = a.loadState()
+				stateFingerprint = nextFingerprint
+			} else {
+				state.Now = now
+			}
+			if stateChanged || minuteChanged || a.timedRefreshNeeded(state, now) {
+				if err := a.updateDisplay(fb, state, &displayedPixels); err != nil {
+					return err
+				}
+				displayedMinute = state.Now.Format("15:04")
 			}
 		}
 	}
 }
 
+func (a *app) stateFingerprint() string {
+	paths := []string{
+		filepath.Join(a.dataDir, "ui_state.psv"),
+		filepath.Join(a.dataDir, "latest_snapshot.tsv"),
+		filepath.Join(a.dataDir, "latest_threats.tsv"),
+		filepath.Join(a.dataDir, "pcap_index.tsv"),
+		filepath.Join(a.dataDir, "pcap_capture.psv"),
+		filepath.Join(a.dataDir, "watched_aps.tsv"),
+		a.muteFile,
+	}
+	var fingerprint strings.Builder
+	for _, path := range paths {
+		info, err := os.Stat(path)
+		if err != nil {
+			fingerprint.WriteString("missing|")
+			continue
+		}
+		fingerprint.WriteString(strconv.FormatInt(info.Size(), 10))
+		fingerprint.WriteByte(':')
+		fingerprint.WriteString(strconv.FormatInt(info.ModTime().UnixNano(), 10))
+		fingerprint.WriteByte('|')
+	}
+	return fingerprint.String()
+}
+
+func (a *app) timedRefreshNeeded(state liveState, now time.Time) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.toast != "" {
+		if !now.Before(a.toastUntil) {
+			a.toast = ""
+		}
+		return true
+	}
+	return state.Capture.Status == "CAPTURING"
+}
+
+func (a *app) updateDisplay(fb io.WriteSeeker, state liveState, displayedPixels *[]byte) error {
+	canvas := a.render(state)
+	if bytes.Equal(*displayedPixels, canvas.Pix) {
+		return nil
+	}
+	*displayedPixels = append((*displayedPixels)[:0], canvas.Pix...)
+	a.publishPNG(canvas)
+	frame := canvasToFramebuffer(canvas)
+	if _, err := fb.Seek(0, io.SeekStart); err != nil {
+		return fmt.Errorf("seek framebuffer: %w", err)
+	}
+	if _, err := fb.Write(frame); err != nil {
+		return fmt.Errorf("write framebuffer: %w", err)
+	}
+	return nil
+}
+
 func (a *app) publishPNG(img image.Image) {
 	var b bytes.Buffer
-	if png.Encode(&b, img) != nil {
+	encoder := png.Encoder{CompressionLevel: png.BestSpeed}
+	if encoder.Encode(&b, img) != nil {
 		return
 	}
 	a.webMu.Lock()
 	a.webPNG = append(a.webPNG[:0], b.Bytes()...)
+	a.webRevision++
+	a.webETag = fmt.Sprintf("\"defcon-%x\"", a.webRevision)
+	if a.webUpdated != nil {
+		close(a.webUpdated)
+	}
+	a.webUpdated = make(chan struct{})
 	a.webMu.Unlock()
 }
 
@@ -281,18 +350,47 @@ func (a *app) serveVirtualPager(ctx context.Context) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = io.WriteString(w, "DEFCON Defense UI active\n")
 	})
-	mux.HandleFunc("/screen.png", func(w http.ResponseWriter, _ *http.Request) {
-		a.webMu.RLock()
-		b := append([]byte(nil), a.webPNG...)
-		a.webMu.RUnlock()
+	mux.HandleFunc("/screen.png", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate")
+		w.Header().Set("Access-Control-Expose-Headers", "ETag")
+		w.Header().Set("Cache-Control", "no-cache")
 		w.Header().Set("Content-Type", "image/png")
-		if len(b) == 0 {
-			http.Error(w, "screen not ready", http.StatusServiceUnavailable)
+		clientETag := r.Header.Get("If-None-Match")
+		if clientETag == "" {
+			clientETag = r.URL.Query().Get("rev")
+		}
+		for {
+			a.webMu.RLock()
+			etag := a.webETag
+			updated := a.webUpdated
+			if etag == "" || clientETag != etag {
+				b := append([]byte(nil), a.webPNG...)
+				a.webMu.RUnlock()
+				if len(b) == 0 {
+					http.Error(w, "screen not ready", http.StatusServiceUnavailable)
+					return
+				}
+				w.Header().Set("ETag", etag)
+				_, _ = w.Write(b)
+				return
+			}
+			a.webMu.RUnlock()
+			if r.URL.Query().Get("wait") == "1" && updated != nil {
+				timer := time.NewTimer(5 * time.Second)
+				select {
+				case <-updated:
+					timer.Stop()
+					continue
+				case <-timer.C:
+				case <-r.Context().Done():
+					timer.Stop()
+					return
+				}
+			}
+			w.Header().Set("ETag", etag)
+			w.WriteHeader(http.StatusNotModified)
 			return
 		}
-		_, _ = w.Write(b)
 	})
 	server := &http.Server{Addr: a.virtualListen, Handler: mux, ReadHeaderTimeout: 2 * time.Second}
 	go func() {

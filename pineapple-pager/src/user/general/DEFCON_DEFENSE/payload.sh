@@ -2,7 +2,7 @@
 # Title: DEFCON Defense
 # Description: Unified passive 2.4/5 GHz monitoring, alerting, evidence, and defensive-tool launcher.
 # Author: Henry Hu
-# Version: 4.0
+# Version: 4.2
 # Category: General
 
 PAYLOAD_ROOT="/root/payloads"
@@ -68,6 +68,7 @@ UI_STATE="$LOOT_DIR/ui_state.psv"
 UI_ACTION="$LOOT_DIR/ui_action.psv"
 UI_MUTE="$LOOT_DIR/ui_muted"
 UI_BRIDGE_SOURCE="$DIR/virtual-pager-bridge.js"
+UI_SESSION_LOCK="$LOOT_DIR/.ui_session.lock"
 pcap_evidence_configure
 mkdir -p "$LOOT_DIR" "$PCAP_DIR"
 
@@ -78,6 +79,8 @@ FOCUS_CAPTURE_ID=""
 BACKGROUND_MONITOR_PID=""
 CUSTOM_UI_BACKEND_PID=""
 CUSTOM_UI_ACTION_PID=""
+CUSTOM_UI_BRIDGE_PID=""
+CUSTOM_UI_LOCKED=0
 MONITOR_PAUSE_FILE="$LOOT_DIR/.background_monitor_pause"
 
 cleanup_focused_monitor() {
@@ -122,13 +125,47 @@ cleanup_background_monitor() {
     wait "$CUSTOM_UI_ACTION_PID" 2>/dev/null || true
   fi
   CUSTOM_UI_ACTION_PID=""
+  if [ -n "$CUSTOM_UI_BRIDGE_PID" ] && kill -0 "$CUSTOM_UI_BRIDGE_PID" 2>/dev/null; then
+    kill "$CUSTOM_UI_BRIDGE_PID" 2>/dev/null || true
+    wait "$CUSTOM_UI_BRIDGE_PID" 2>/dev/null || true
+  fi
+  CUSTOM_UI_BRIDGE_PID=""
   rm -f "$UI_ACTION" "$UI_ACTION.processing"
   rm -f "$MONITOR_PAUSE_FILE"
+}
+
+custom_ui_lock_acquire() {
+  local owner=""
+  if mkdir "$UI_SESSION_LOCK" 2>/dev/null; then
+    printf '%s\n' "$$" > "$UI_SESSION_LOCK/pid"
+    CUSTOM_UI_LOCKED=1
+    return 0
+  fi
+  [ -f "$UI_SESSION_LOCK/pid" ] && owner="$(cat "$UI_SESSION_LOCK/pid" 2>/dev/null)"
+  # An empty owner can mean another launch won mkdir and has not written its
+  # PID yet. Treat it as active rather than breaking a valid lock mid-startup.
+  [ -n "$owner" ] || return 1
+  if printf '%s' "$owner" | grep -Eq '^[0-9]+$' && kill -0 "$owner" 2>/dev/null; then
+    return 1
+  fi
+  rm -f "$UI_SESSION_LOCK/pid" 2>/dev/null || true
+  rmdir "$UI_SESSION_LOCK" 2>/dev/null || return 1
+  mkdir "$UI_SESSION_LOCK" 2>/dev/null || return 1
+  printf '%s\n' "$$" > "$UI_SESSION_LOCK/pid"
+  CUSTOM_UI_LOCKED=1
+}
+
+custom_ui_lock_release() {
+  [ "$CUSTOM_UI_LOCKED" = "1" ] || return 0
+  rm -f "$UI_SESSION_LOCK/pid" 2>/dev/null || true
+  rmdir "$UI_SESSION_LOCK" 2>/dev/null || true
+  CUSTOM_UI_LOCKED=0
 }
 
 cleanup_defcon_defense() {
   cleanup_focused_monitor
   cleanup_background_monitor
+  custom_ui_lock_release
 }
 trap cleanup_defcon_defense EXIT
 trap 'cleanup_defcon_defense; exit 130' INT
@@ -480,39 +517,41 @@ install_virtual_pager_bridge() {
   local ui_root="/pineapple/ui"
   local index="$ui_root/index.html"
   local target="$ui_root/defcon-ui-bridge.js"
+  local inline="$ui_root/defcon-ui-bridge.inline"
   local tmp="$ui_root/index.html.defcon-defense.tmp"
   [ -f "$UI_BRIDGE_SOURCE" ] && [ -f "$index" ] || return 1
   cp "$UI_BRIDGE_SOURCE" "$target" || return 1
-  if grep -Fq '__defconDefenseBridgeVersion = "4.0.1"' "$index"; then
+  if grep -Fq '__defconDefenseBridgeVersion = "4.2.3"' "$index"; then
     return 0
   fi
   [ -f "$ui_root/index.html.defcon-defense-backup" ] || \
     cp "$index" "$ui_root/index.html.defcon-defense-backup" || return 1
-  # Replace an older external-script bridge with the pristine stock page. The
-  # Pager's static router does not expose arbitrary new JS files even when the
-  # authenticated HTML page can read them from disk.
-  if grep -Fq 'src="defcon-ui-bridge.js"' "$index" || \
-     grep -Fq '__defconDefenseBridgeInstalled' "$index"; then
-    cp "$ui_root/index.html.defcon-defense-backup" "$index" || return 1
-  fi
-  awk '
-    FNR == NR { bridge = bridge $0 ORS; next }
-    /<\/body>/ && !inserted {
-      print "<script>"
-      printf "%s", bridge
-      print "</script>"
-      inserted = 1
-    }
-    { print }
-  ' "$UI_BRIDGE_SOURCE" "$index" > "$tmp" && mv -f "$tmp" "$index"
+  # Rebuild from the pristine page with BusyBox sed. The prior awk string
+  # accumulator emitted the 140 KB portal extremely slowly on this hardware.
+  # A small prebuilt inline block keeps the rewrite fast and correctly places
+  # the bridge before the closing body tag.
+  {
+    printf '<script>\n'
+    cat "$UI_BRIDGE_SOURCE"
+    printf '\n</script>\n</body>\n'
+  } > "$inline" || return 1
+  sed "/<\\/body>/{
+r $inline
+d
+}" "$ui_root/index.html.defcon-defense-backup" > "$tmp" || return 1
+  mv -f "$tmp" "$index"
 }
 
 custom_ui_session() {
+  if ! custom_ui_lock_acquire; then
+    return 0
+  fi
   set_recon_bands || true
   # Render immediately from the last good state. Recon refresh belongs in the
   # background so the operator never waits at a blank stock payload screen.
   write_custom_ui_state
-  install_virtual_pager_bridge >/dev/null 2>&1 || true
+  install_virtual_pager_bridge >/dev/null 2>&1 &
+  CUSTOM_UI_BRIDGE_PID=$!
   custom_ui_backend_loop >/dev/null 2>&1 &
   CUSTOM_UI_BACKEND_PID=$!
   custom_ui_action_loop >/dev/null 2>&1 &
