@@ -8,7 +8,7 @@ a repeated same-offense**, stay quiet on ambient DEF CON noise.
 
 | Payload | Type | Warns you when… |
 |---|---|---|
-| `user/general/DEFCON_DEFENSE` | on-demand | provides a three-part native Pager experience: a concise general monitoring screen, red high-threat details, and a browsable PCAP evidence library; it also supplies live passive 2.4/5 GHz Recon, background trusted/watched-network correlation, focused capture, setup, and defensive tools |
+| `user/general/DEFCON_DEFENSE` | on-demand | runs a dedicated 480x222 full-screen Pager application with the designed general, threat-detail, and PCAP-evidence interfaces; it supplies live passive 2.4/5 GHz Recon, background trusted/watched-network correlation, bounded investigation capture, evidence verification, and later download through Virtual Pager |
 | `alerts/deauth_flood_detected/defcon_sentry` | auto (custom) | the **same** attacker sustains a deauth/disassoc flood (3 hits/2 min, 5 min cooldown; watched MACs escalate instantly), then immediately starts a bounded passive PCAP when storage and concurrency guards allow |
 | `alerts/pineapple_client_connected/defcon_honeypot` | auto (custom) | a client joins **your decoy AP** (first sighting per client, dedup reconnects; flags randomized/private MACs — most modern phones use these, so it's expected, not alarming) |
 | `user/general/PORT_ALERT` | on-demand | someone port-scans the Pager (auto-hardens firewall 60s) |
@@ -27,6 +27,8 @@ PMKID attacks, handshake capture/crack, captive portals, PineAP karma/rogue-AP.
    cd pineapple-pager && ./build.sh
    ```
    This writes `pineapple-pager/library/`.
+   The build uses Go to cross-compile the custom UI as a static MIPS32
+   soft-float binary for the Pager; all Go dependencies are vendored.
    For a Pager-ready archive with macOS metadata stripped, run `./package.sh`;
    it writes the archive and checksum manifest under `pineapple-pager/dist/`.
 2. Copy `pineapple-pager/library/*` into the Pager's `/mmc/root/payloads/`
@@ -44,25 +46,23 @@ PMKID attacks, handshake capture/crack, captive portals, PineAP karma/rogue-AP.
 
 - **Always-on (no action needed once armed):** `defcon_sentry`, `defcon_honeypot`
   — they fire from the engine while you do anything else.
-- **Unified RF monitoring:** open `DEFCON_DEFENSE`; its native Pager lists use
-  UP/DOWN to move, green A to select/open, red B to cancel/back, and LEFT/RIGHT
-  to move between threat details. The first viewport keeps **Live RF**,
-  **Threat Details**, and **PCAP Evidence** together, with monitoring/threat/
-  capture state in the labels. Passive trusted/watched-network correlation runs
-  in the background while the app is open and can be paused from **Monitoring
-  Controls**. Choose **Live RF Traffic** for a continuously refreshing
-  AP/packet/signal dashboard. Choose
-  **Browse Recon Networks** to select an AP already visible in Recon, watch it,
-  or start focused live signal monitoring plus a firmware-native passive PCAP.
-  Open the separate **Threat Activity Live** page for continuous Recon
-  correlation with malicious indicators rendered in red. Use **Investigate
-  Threats** for the native arrow/A/B list and focused capture of one current
-  event. A confirmed red alert begins a 30-second passive PCAP immediately when
+- **Unified RF monitoring:** open `DEFCON_DEFENSE`. The custom application
+  renders directly on the physical 480x222 display and mirrors the same canvas
+  in Virtual Pager. The three primary views are the designed **general**,
+  **threat detail**, and **evidence browser** screens. On the general screen,
+  UP/DOWN moves the highlight, A opens the selected item, B exits, and
+  LEFT/RIGHT opens evidence. In threat detail, UP/DOWN selects the next/previous
+  alert, A requests a bounded passive investigation capture, B toggles alert
+  audio, LEFT returns to general, and RIGHT opens evidence. In evidence,
+  UP/DOWN selects a PCAP, LEFT/RIGHT changes page, A opens metadata and on-demand
+  SHA-256 verification, and B returns to general. Passive trusted/watched-
+  network correlation continues in the background. A confirmed red alert
+  begins a 30-second passive PCAP immediately when
   no capture is active, the same threat is outside its five-minute capture
   cooldown, and the storage safety reserve is healthy. The alert and detail
   screens show `PCAP CAPTURING`, `EVIDENCE SAVED`, or the reason capture was
-  skipped. This keeps ordinary RF traffic separate from actionable indicators. A baseline is
-  optional: selected and trusted-network mismatches work without one. When a
+  skipped. This keeps ordinary RF traffic separate from actionable indicators.
+  A baseline is optional: selected and trusted-network mismatches work without one. When a
   reviewed baseline is present, persistent strong new BSSIDs are also detected.
 - **Walking the floor / feeling watched:** launch `find_hackers`, then `alien_ap`
   for a rogue-AP sweep. Add `SignalFence` if you want a proximity tripwire.
@@ -103,6 +103,12 @@ needed. Digesting is intentionally on demand so a large pre-existing PCAP does
 not delay the general screen. To retrieve captures
 later, open Virtual Pager, choose **Download Loot**, unzip the archive, and open
 the `pcap/` folder.
+
+The custom UI publishes a read-only PNG mirror on device port `1472` only while
+the application is running. An idempotent bridge in the authenticated Virtual
+Pager page displays that canvas and automatically falls back to the stock Pager
+screen when the application exits. The stock page is backed up before the
+bridge is first installed.
 
 Automatic PCAP capture is deliberately bounded and conservative:
 

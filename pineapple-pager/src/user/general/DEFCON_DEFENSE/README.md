@@ -4,16 +4,21 @@ The single visible Pager entry point for the defensive payload package. It
 combines passive 2.4/5 GHz monitoring, local alerting, evidence review, and the
 curated manual tools in one menu.
 
-Open it from **Payloads > General > DEFCON Defense**. Version 3.0 organizes the
-experience around three native Pager interfaces:
+Open it from **Payloads > General > DEFCON Defense**. Version 4.0 runs a
+dedicated full-screen MIPS application that reproduces the three designed
+480x222 Pager interfaces:
 
-1. the **general screen**, with Live RF, threat state, and PCAP evidence in the
-   first viewport;
+1. the **general screen**, with threat state, Live RF, monitored networks, and
+   page navigation;
 2. **threat detail**, with severity, plain-language event, affected network,
    secondary RF evidence, and live capture state; and
 3. **PCAP Evidence**, with saved time, threat, SSID, size, status, details,
    on-demand SHA-256 verification, deletion confirmation, and Virtual Pager
    download instructions.
+
+The same rendered canvas appears on the physical Pager and in authenticated
+Virtual Pager. The bridge is active only while the application is running and
+falls back to the stock Pager display when it exits.
 
 Use it to:
 
@@ -29,8 +34,8 @@ Use it to:
   prominently in red while the page remains open;
 - open the separate **Investigate Threats** native list with arrows and green A
   to select a current indicator for focused passive capture;
-- use the Pager-native arrows to navigate, green A to confirm/open, and red B
-  to cancel/back;
+- use UP/DOWN to select, LEFT/RIGHT to move among the three primary views,
+  green A to open/investigate, and red B for the action named in the footer;
 - watch selected networks without a baseline, or optionally create a reviewed
   BSSID baseline for broader new-AP detection;
 - monitor continuously for trusted-network impersonation, trusted AP identity

@@ -64,8 +64,15 @@ assert_eq "${manual%%|*}" "CAPTURING" "manual focused capture uses the same evid
 pcap_evidence_finish "$manual_id" >/dev/null
 assert_eq "$(pcap_evidence_count)" "2" "manual focused capture appears in evidence library"
 
+bounded="$(pcap_evidence_bounded_start "MANUAL_INVESTIGATE" "INFO" "SOC" \
+  "00:11:22:33:44:66" "5GHz" "44" "-57" "manual-investigate" 0 1)"
+assert_eq "${bounded%%|*}" "CAPTURING" "custom UI starts a bounded passive investigation capture"
+sleep 2
+assert_eq "$(awk -F '\t' '$3=="MANUAL_INVESTIGATE" {print $13; exit}' "$PCAP_EVIDENCE_INDEX")" \
+  "SAVED" "custom UI investigation capture is saved for evidence browsing"
+
 printf 'older-pcap\n' > "$PCAP_EVIDENCE_PCAP_DIR/preexisting.pcap"
-assert_eq "$(pcap_evidence_count)" "3" "preexisting Pager PCAP is imported for later browsing"
+assert_eq "$(pcap_evidence_count)" "4" "preexisting Pager PCAP is imported for later browsing"
 assert_eq "$(awk -F '\t' '$3=="LEGACY_CAPTURE" {print $13; exit}' "$PCAP_EVIDENCE_INDEX")" "SAVED" \
   "imported legacy PCAP is indexed without changing the capture file"
 assert_eq "$(awk -F '\t' '$3=="LEGACY_CAPTURE" {print $12; exit}' "$PCAP_EVIDENCE_INDEX")" "pending" \

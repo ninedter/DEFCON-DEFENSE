@@ -2,7 +2,7 @@
 # Title: DEFCON Defense
 # Description: Unified passive 2.4/5 GHz monitoring, alerting, evidence, and defensive-tool launcher.
 # Author: Henry Hu
-# Version: 3.0
+# Version: 4.0
 # Category: General
 
 PAYLOAD_ROOT="/root/payloads"
@@ -63,6 +63,11 @@ PCAP_EVIDENCE_INDEX="$LOOT_DIR/pcap_index.tsv"
 PCAP_EVIDENCE_STATE="$LOOT_DIR/pcap_capture.psv"
 PCAP_EVIDENCE_DEDUPE="$LOOT_DIR/pcap_dedupe.psv"
 PCAP_EVIDENCE_LOCK="$LOOT_DIR/.pcap_capture.lock"
+UI_BINARY="${DEFCON_DEFENSE_UI_BINARY:-$DIR/defcon-ui}"
+UI_STATE="$LOOT_DIR/ui_state.psv"
+UI_ACTION="$LOOT_DIR/ui_action.psv"
+UI_MUTE="$LOOT_DIR/ui_muted"
+UI_BRIDGE_SOURCE="$DIR/virtual-pager-bridge.js"
 pcap_evidence_configure
 mkdir -p "$LOOT_DIR" "$PCAP_DIR"
 
@@ -71,6 +76,8 @@ FOCUS_PCAP_ACTIVE=0
 FOCUS_SIGNAL_FILE=""
 FOCUS_CAPTURE_ID=""
 BACKGROUND_MONITOR_PID=""
+CUSTOM_UI_BACKEND_PID=""
+CUSTOM_UI_ACTION_PID=""
 MONITOR_PAUSE_FILE="$LOOT_DIR/.background_monitor_pause"
 
 cleanup_focused_monitor() {
@@ -105,6 +112,17 @@ cleanup_background_monitor() {
     wait "$BACKGROUND_MONITOR_PID" 2>/dev/null || true
   fi
   BACKGROUND_MONITOR_PID=""
+  if [ -n "$CUSTOM_UI_BACKEND_PID" ] && kill -0 "$CUSTOM_UI_BACKEND_PID" 2>/dev/null; then
+    kill "$CUSTOM_UI_BACKEND_PID" 2>/dev/null || true
+    wait "$CUSTOM_UI_BACKEND_PID" 2>/dev/null || true
+  fi
+  CUSTOM_UI_BACKEND_PID=""
+  if [ -n "$CUSTOM_UI_ACTION_PID" ] && kill -0 "$CUSTOM_UI_ACTION_PID" 2>/dev/null; then
+    kill "$CUSTOM_UI_ACTION_PID" 2>/dev/null || true
+    wait "$CUSTOM_UI_ACTION_PID" 2>/dev/null || true
+  fi
+  CUSTOM_UI_ACTION_PID=""
+  rm -f "$UI_ACTION" "$UI_ACTION.processing"
   rm -f "$MONITOR_PAUSE_FILE"
 }
 
@@ -310,7 +328,9 @@ alert_rf_finding() { # type bssid ssid channel freq signal band
   else
     capture_note="PCAP: manual capture available after review"
   fi
-  RINGTONE --vibrate urgent >/dev/null 2>&1 &
+  if [ ! -f "$UI_MUTE" ]; then
+    RINGTONE --vibrate urgent >/dev/null 2>&1 &
+  fi
   LED ATTACK >/dev/null 2>&1 || true
   ALERT "$severity THREAT
 $label
@@ -379,6 +399,130 @@ background_monitor_status() {
   else
     echo "PAUSED"
   fi
+}
+
+write_custom_ui_state() {
+  local tmp="$UI_STATE.tmp.$$" threat_snapshot="$LOOT_DIR/latest_threats.tsv"
+  local count24=0 count5=0 ap_count=0 threat_count=0 watched_count=0
+  if [ -s "$SNAPSHOT" ]; then
+    count24="$(rf_count_band "$SNAPSHOT" "2.4GHz")"
+    count5="$(rf_count_band "$SNAPSHOT" "5GHz")"
+    ap_count=$((count24 + count5))
+    rf_build_threat_snapshot "$WATCHED_APS" "$TRUSTED_APS" "$BASELINE" "$SNAPSHOT" \
+      "$DEAUTH_EVENTS" "$(date +%s)" "$threat_snapshot" >/dev/null 2>&1 || true
+  fi
+  [ -s "$threat_snapshot" ] && threat_count="$(wc -l < "$threat_snapshot" | tr -d ' ')"
+  watched_count="$(rf_watch_count "$WATCHED_APS")"
+  pcap_evidence_import_existing >/dev/null 2>&1 || true
+  {
+    printf 'version=4\n'
+    printf 'monitoring=ACTIVE\n'
+    printf 'updated_epoch=%s\n' "$(date +%s)"
+    printf 'ap_count=%s\n' "$ap_count"
+    printf 'count_24=%s\n' "$count24"
+    printf 'count_5=%s\n' "$count5"
+    printf 'threat_count=%s\n' "$threat_count"
+    printf 'watched_count=%s\n' "$watched_count"
+  } > "$tmp" && mv -f "$tmp" "$UI_STATE"
+}
+
+custom_ui_backend_loop() {
+  while true; do
+    if capture_snapshot 1; then
+      analyze_snapshot 1
+    fi
+    write_custom_ui_state
+    sleep "$MONITOR_INTERVAL"
+  done
+}
+
+verify_custom_ui_evidence() { # evidence id
+  local id="$1" path sha tmp
+  path="$(awk -F '\t' -v wanted="$id" 'NR>1 && $2==wanted {print $15; exit}' \
+    "$PCAP_EVIDENCE_INDEX" 2>/dev/null)"
+  case "$path" in
+    "$PCAP_DIR"/*) ;;
+    *) return 1 ;;
+  esac
+  [ -f "$path" ] || return 1
+  sha="$(pcap_evidence_sha256 "$path")"
+  [ -n "$sha" ] || sha="unavailable"
+  tmp="$PCAP_EVIDENCE_INDEX.tmp.$$"
+  awk -F '\t' -v OFS='\t' -v wanted="$id" -v digest="$sha" \
+    '$2==wanted {$12=digest} {print}' "$PCAP_EVIDENCE_INDEX" > "$tmp" && \
+    mv -f "$tmp" "$PCAP_EVIDENCE_INDEX"
+}
+
+custom_ui_action_loop() {
+  local action event ssid bssid band channel signal id
+  while true; do
+    if [ -s "$UI_ACTION" ] && mv -f "$UI_ACTION" "$UI_ACTION.processing" 2>/dev/null; then
+      IFS='|' read -r action event ssid bssid band channel signal < "$UI_ACTION.processing" || true
+      rm -f "$UI_ACTION.processing"
+      case "$action" in
+        CAPTURE)
+          pcap_evidence_bounded_start "${event:-MANUAL_INVESTIGATE}" "INFO" \
+            "$ssid" "$bssid" "$band" "$channel" "$signal" \
+            "manual-investigate" 0 "${PCAP_EVIDENCE_DURATION:-30}" >/dev/null 2>&1 || true
+          ;;
+        VERIFY)
+          id="$event"
+          verify_custom_ui_evidence "$id" >/dev/null 2>&1 || true
+          ;;
+      esac
+      write_custom_ui_state
+    fi
+    sleep 1
+  done
+}
+
+install_virtual_pager_bridge() {
+  local ui_root="/pineapple/ui"
+  local index="$ui_root/index.html"
+  local target="$ui_root/defcon-ui-bridge.js"
+  local tmp="$ui_root/index.html.defcon-defense.tmp"
+  [ -f "$UI_BRIDGE_SOURCE" ] && [ -f "$index" ] || return 1
+  cp "$UI_BRIDGE_SOURCE" "$target" || return 1
+  if grep -Fq '__defconDefenseBridgeVersion = "4.0.1"' "$index"; then
+    return 0
+  fi
+  [ -f "$ui_root/index.html.defcon-defense-backup" ] || \
+    cp "$index" "$ui_root/index.html.defcon-defense-backup" || return 1
+  # Replace an older external-script bridge with the pristine stock page. The
+  # Pager's static router does not expose arbitrary new JS files even when the
+  # authenticated HTML page can read them from disk.
+  if grep -Fq 'src="defcon-ui-bridge.js"' "$index" || \
+     grep -Fq '__defconDefenseBridgeInstalled' "$index"; then
+    cp "$ui_root/index.html.defcon-defense-backup" "$index" || return 1
+  fi
+  awk '
+    FNR == NR { bridge = bridge $0 ORS; next }
+    /<\/body>/ && !inserted {
+      print "<script>"
+      printf "%s", bridge
+      print "</script>"
+      inserted = 1
+    }
+    { print }
+  ' "$UI_BRIDGE_SOURCE" "$index" > "$tmp" && mv -f "$tmp" "$index"
+}
+
+custom_ui_session() {
+  set_recon_bands || true
+  # Render immediately from the last good state. Recon refresh belongs in the
+  # background so the operator never waits at a blank stock payload screen.
+  write_custom_ui_state
+  install_virtual_pager_bridge >/dev/null 2>&1 || true
+  custom_ui_backend_loop >/dev/null 2>&1 &
+  CUSTOM_UI_BACKEND_PID=$!
+  custom_ui_action_loop >/dev/null 2>&1 &
+  CUSTOM_UI_ACTION_PID=$!
+  "$UI_BINARY" \
+    --framebuffer /dev/fb0 \
+    --data-dir "$LOOT_DIR" \
+    --pcap-dir "$PCAP_DIR" \
+    --action-file "$UI_ACTION" \
+    --mute-file "$UI_MUTE"
 }
 
 AP_BSSIDS=()
@@ -1232,4 +1376,8 @@ if [ "${DEFCON_DEFENSE_SOURCE_ONLY:-0}" = "1" ]; then
   if [ "$0" = "${BASH_SOURCE[0]}" ]; then exit 0; else return 0; fi
 fi
 
-general_screen
+if [ "${DEFCON_DEFENSE_NATIVE_UI:-1}" = "1" ] && [ -x "$UI_BINARY" ] && [ -w /dev/fb0 ]; then
+  custom_ui_session
+else
+  general_screen
+fi

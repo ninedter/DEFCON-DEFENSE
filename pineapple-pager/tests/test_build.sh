@@ -17,9 +17,11 @@ for p in \
   alerts/pineapple_client_connected/defcon_honeypot/payload.sh \
   alerts/pineapple_client_connected/defcon_honeypot/pager_alert_lib.sh \
   user/general/DEFCON_DEFENSE/payload.sh \
+  user/general/DEFCON_DEFENSE/defcon-ui \
   user/general/DEFCON_DEFENSE/pcap_evidence_lib.sh \
   user/general/DEFCON_DEFENSE/rf_guard_lib.sh \
   user/general/DEFCON_DEFENSE/trusted_aps.conf \
+  user/general/DEFCON_DEFENSE/virtual-pager-bridge.js \
   user/general/PORT_ALERT/payload.sh \
   user/general/ICMP_ALERT/payload.sh \
   user/reconnaissance/find_hackers/payload.sh \
@@ -27,6 +29,11 @@ for p in \
   user/reconnaissance/alien_ap/filter.awk ; do
   [ -f "$OUT/$p" ]; assert_rc "$?" "0" "built: $p"
 done
+
+file "$OUT/user/general/DEFCON_DEFENSE/defcon-ui" | grep -q 'ELF 32-bit.*MIPS'
+assert_rc "$?" "0" "full-screen UI is compiled for the Pager MIPS architecture"
+assert_eq "$(ls -l "$OUT/user/general/DEFCON_DEFENSE/defcon-ui" | cut -c1-10)" "-rwxr-xr-x" \
+  "full-screen UI binary is executable"
 
 # SignalFence is optional (may be absent in newer library versions):
 # built iff present in the submodule.
@@ -52,7 +59,10 @@ UNIFIED="$OUT/user/general/DEFCON_DEFENSE/payload.sh"
 if rg -n 'NUMBER_PICKER' "$UNIFIED" >/dev/null 2>&1; then picker_rc=1; else picker_rc=0; fi
 assert_rc "$picker_rc" "0" "unified navigation does not open a number picker"
 rg -q '^general_screen()' "$UNIFIED"; assert_rc "$?" "0" "general screen is the Pager entry point"
-rg -q 'LIST_PICKER "\$title"' "$UNIFIED"; assert_rc "$?" "0" "general navigation uses the native Pager list picker"
+rg -q '^custom_ui_session()' "$UNIFIED"; assert_rc "$?" "0" "custom full-screen application is the primary Pager interface"
+rg -q -- '--framebuffer /dev/fb0' "$UNIFIED"; assert_rc "$?" "0" "custom interface renders on the physical Pager framebuffer"
+rg -q '^install_virtual_pager_bridge()' "$UNIFIED"; assert_rc "$?" "0" "Virtual Pager receives the custom application canvas"
+rg -q 'DEFCON_DEFENSE_NATIVE_UI' "$UNIFIED"; assert_rc "$?" "0" "native list UI remains a safe fallback"
 rg -q 'Live RF |.*AP | 2.4 + 5 GHz' "$UNIFIED"; assert_rc "$?" "0" "general screen leads with monitoring state"
 rg -q 'Threat Details |.*threat_text' "$UNIFIED"; assert_rc "$?" "0" "general screen exposes threat state in the first viewport"
 rg -q 'PCAP Evidence |.*saved' "$UNIFIED"; assert_rc "$?" "0" "general screen exposes saved evidence in the first viewport"

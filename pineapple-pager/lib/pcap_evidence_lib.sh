@@ -300,10 +300,12 @@ pcap_evidence_finish() { # id
   printf '%s|%s|%s\n' "$saved_status" "$path" "$size"
 }
 
-pcap_evidence_auto_start() { # event severity ssid bssid band channel signal
+pcap_evidence_bounded_start() { # event severity ssid bssid band channel signal trigger dedupe duration
+  local event="$1" severity="$2" ssid="$3" bssid="$4" band="$5" channel="$6" signal="$7"
+  local trigger="${8:-automatic}" dedupe="${9:-1}" duration="${10:-$PCAP_EVIDENCE_DURATION}"
   local result status id path epoch worker_pid
-  result="$(pcap_evidence_begin "$1" "$2" "$3" "$4" "$5" "$6" "$7" \
-    "automatic" 1 "$PCAP_EVIDENCE_DURATION")"
+  result="$(pcap_evidence_begin "$event" "$severity" "$ssid" "$bssid" "$band" "$channel" "$signal" \
+    "$trigger" "$dedupe" "$duration")"
   status="${result%%|*}"
   if [ "$status" = "CAPTURING" ]; then
     id="$(printf '%s' "$result" | cut -d '|' -f2)"
@@ -312,7 +314,7 @@ pcap_evidence_auto_start() { # event severity ssid bssid band channel signal
     (
       local worker_started worker_used worker_free
       worker_started="$(pcap_evidence_now)"
-      while [ $(( $(pcap_evidence_now) - worker_started )) -lt "$PCAP_EVIDENCE_DURATION" ]; do
+      while [ $(( $(pcap_evidence_now) - worker_started )) -lt "$duration" ]; do
         sleep 1
         worker_used="$(pcap_evidence_total_bytes)"
         worker_free="$(pcap_evidence_free_bytes)"
@@ -331,6 +333,11 @@ pcap_evidence_auto_start() { # event severity ssid bssid band channel signal
     printf '%s\n' "$result"
     return 1
   fi
+}
+
+pcap_evidence_auto_start() { # event severity ssid bssid band channel signal
+  pcap_evidence_bounded_start "$1" "$2" "$3" "$4" "$5" "$6" "$7" \
+    "automatic" 1 "$PCAP_EVIDENCE_DURATION"
 }
 
 pcap_evidence_manual_start() { # event severity ssid bssid band channel signal
