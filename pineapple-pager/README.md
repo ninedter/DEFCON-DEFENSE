@@ -107,10 +107,12 @@ the `pcap/` folder.
 The custom UI publishes a read-only PNG mirror on device port `1472` only while
 the application is running. An idempotent bridge in the authenticated Virtual
 Pager page displays that canvas and automatically falls back to the stock Pager
-screen when the application exits. Version 4.2 sends only changed frames using
-change-driven long polling and prevents duplicate UI instances. The stock page
-is backed up before the bridge is first installed. Measured before/after results
-are recorded in `docs/ui-v4/performance.md`.
+screen when the application exits. Version 4.3 sends only changed frames using
+change-driven long polling, prevents duplicate UI instances, and clips dynamic
+text to its assigned panels. The stock page is backed up before the bridge is
+first installed. Measured before/after results are recorded in
+`docs/ui-v4/performance.md`. The complete normal, empty, detail, and stress-state
+containment audit is in `docs/audits/2026-08-10-text-containment/README.md`.
 
 Automatic PCAP capture is deliberately bounded and conservative:
 

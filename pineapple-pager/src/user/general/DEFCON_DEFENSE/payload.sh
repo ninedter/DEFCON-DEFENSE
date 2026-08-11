@@ -2,7 +2,7 @@
 # Title: DEFCON Defense
 # Description: Unified passive 2.4/5 GHz monitoring, alerting, evidence, and defensive-tool launcher.
 # Author: Henry Hu
-# Version: 4.2
+# Version: 4.3
 # Category: General
 
 PAYLOAD_ROOT="/root/payloads"

@@ -38,11 +38,16 @@ import (
 )
 
 const (
-	screenWidth  = 480
-	screenHeight = 222
-	fbWidth      = 222
-	fbHeight     = 480
-	frameBytes   = fbWidth * fbHeight * 2
+	screenWidth   = 480
+	screenHeight  = 222
+	fbWidth       = 222
+	fbHeight      = 480
+	frameBytes    = fbWidth * fbHeight * 2
+	textCellWidth = 8
+
+	passiveCaptureLabel   = "PASSIVE CAPTURE:"
+	passiveCaptureLabelX  = 244
+	passiveCaptureIconGap = 8
 )
 
 var (
@@ -187,17 +192,50 @@ func (a *app) renderPreviews() error {
 	}
 	a.preview = true
 	state := a.loadState()
+	clearState := state
+	clearState.Threats = nil
+	clearState.Capture = Capture{Status: "IDLE"}
+	emptyEvidenceState := clearState
+	emptyEvidenceState.Evidence = nil
+	emptyEvidenceState.UsedBytes = 0
+
+	stressState := previewState()
+	stressState.Monitoring = "RECONNECTING TO MONITOR SERVICE"
+	stressState.Threats = append([]Threat(nil), stressState.Threats...)
+	stressState.Threats[0].SSID = "DEFCON-CONFERENCE-GUEST-NETWORK-WITH-A-LONG-NAME"
+	stressState.Threats[0].Event = "UNRECOGNIZED_SECURITY_EVENT_WITH_A_VERY_LONG_NAME"
+	stressState.Evidence = append([]Evidence(nil), stressState.Evidence...)
+	stressState.Evidence[0].SSID = "DEFCON-CONFERENCE-GUEST-NETWORK-WITH-A-LONG-NAME"
+	stressState.Evidence[0].Event = "UNRECOGNIZED_SECURITY_EVENT_WITH_A_VERY_LONG_NAME"
+	stressState.Evidence[0].Status = "VERIFICATION_PENDING"
+	stressState.Evidence[0].Size = 9876543210
 	views := []struct {
 		name   string
 		screen screenKind
+		state  liveState
+		toast  string
 	}{
-		{"01-general.png", screenGeneral},
-		{"02-threat.png", screenThreat},
-		{"03-evidence.png", screenEvidence},
+		{"01-general.png", screenGeneral, state, ""},
+		{"02-threat.png", screenThreat, state, ""},
+		{"03-evidence.png", screenEvidence, state, ""},
+		{"04-evidence-detail.png", screenEvidenceDetail, state, ""},
+		{"05-threat-clear.png", screenThreat, clearState, ""},
+		{"06-evidence-empty.png", screenEvidence, emptyEvidenceState, ""},
+		{"07-stress-general.png", screenGeneral, stressState, ""},
+		{"08-stress-threat.png", screenThreat, stressState, ""},
+		{"09-stress-evidence.png", screenEvidence, stressState, ""},
+		{"10-stress-evidence-detail.png", screenEvidenceDetail, stressState, ""},
+		{"11-stress-toast.png", screenGeneral, stressState, "A VERY LONG OPERATOR MESSAGE THAT MUST REMAIN INSIDE THE TOAST PANEL WITHOUT OVERLAP"},
 	}
 	for _, view := range views {
 		a.screen = view.screen
-		img := a.render(state)
+		a.toast = view.toast
+		if view.toast != "" {
+			a.toastUntil = time.Now().Add(time.Minute)
+		} else {
+			a.toastUntil = time.Time{}
+		}
+		img := a.render(view.state)
 		f, err := os.Create(filepath.Join(a.previewDir, view.name))
 		if err != nil {
 			return err
@@ -811,7 +849,7 @@ func (a *app) renderGeneral(img *image.RGBA, s liveState) {
 	drawText(img, 12, 44, "THREAT STATE:", cyan, false, 1)
 	drawText(img, 145, 44, state, stateColor, true, 1)
 	drawText(img, 292, 44, "MONITORING:", cyan, false, 1)
-	drawText(img, 409, 44, s.Monitoring, green, true, 1)
+	drawTextBox(img, image.Rect(405, 40, 471, 62), 405, 44, trimCells(s.Monitoring, 8), green, true, 1)
 	drawText(img, 12, 67, "BANDS:", cyan, false, 1)
 	drawText(img, 80, 67, "2.4 GHZ + 5 GHZ", green, true, 1)
 	hLine(img, 9, 471, 90, cyan2)
@@ -830,7 +868,7 @@ func (a *app) renderGeneral(img *image.RGBA, s liveState) {
 			drawText(img, 15, y[i]+3, ">", black, true, 1)
 		}
 		drawText(img, 38, y[i]+3, row.left, fg, i == a.generalSelected, 1)
-		drawTextRight(img, 452, y[i]+3, row.right, fg, i == a.generalSelected)
+		drawTextRightBox(img, image.Rect(320, y[i], 453, y[i]+22), y[i]+3, row.right, fg, i == a.generalSelected)
 	}
 	hLine(img, 9, 471, 188, cyan2)
 	drawText(img, 14, 199, "A", green, true, 1)
@@ -864,8 +902,8 @@ func (a *app) renderThreat(img *image.RGBA, s liveState) {
 		fillColor, cardTitle, cardSub = green, "CLEAR", "STATE"
 	}
 	stroke(img, image.Rect(7, 30, 87, 87), 2, fillColor)
-	drawText(img, 14, 37, cardTitle, fillColor, true, 2)
-	drawText(img, 14, 65, cardSub, fillColor, true, 1)
+	drawTextFitted(img, image.Rect(9, 31, 85, 65), 14, 37, cardTitle, fillColor, true, 2)
+	drawTextBox(img, image.Rect(9, 64, 85, 85), 14, 65, cardSub, fillColor, true, 1)
 	if hasThreat {
 		a.renderer.drawIcon(img, 99, 32, "\ue002", 28, red)
 	}
@@ -900,8 +938,9 @@ func (a *app) renderThreat(img *image.RGBA, s liveState) {
 	drawMetricAt(img, 244, 356, 104, "EVENT TIME:", eventTime, cyan)
 	drawMetricAt(img, 244, 356, 122, "DURATION:", duration, cyan)
 	drawMetricAt(img, 244, 356, 140, "EVIDENCE:", trimCells(evidenceStatus, 14), red)
-	drawText(img, 244, 158, "PASSIVE CAPTURE:", white, true, 1)
-	a.renderer.drawIcon(img, 361, 156, "\ue1da", 16, green)
+	drawTextBox(img, image.Rect(244, 156, 374, 173), passiveCaptureLabelX, 158, passiveCaptureLabel, white, true, 1)
+	passiveIconX := passiveCaptureLabelX + textPixelWidth(passiveCaptureLabel, 1) + passiveCaptureIconGap
+	a.renderer.drawIcon(img, passiveIconX, 156, "\ue1da", 16, green)
 
 	stroke(img, image.Rect(4, 173, 476, 202), 1, white)
 	for _, x := range []int{136, 225, 350} {
@@ -921,7 +960,7 @@ func (a *app) renderThreat(img *image.RGBA, s liveState) {
 func (a *app) renderEvidence(img *image.RGBA, s liveState) {
 	drawText(img, 10, 7, "EVIDENCE", yellow, true, 1)
 	total := fmt.Sprintf("%d PCAPS · %s / %s", len(s.Evidence), humanBytes(s.UsedBytes), humanBytes(s.StorageMax))
-	drawTextRight(img, 470, 9, total, cyan, true)
+	drawTextRightBox(img, image.Rect(158, 4, 471, 25), 9, trimCells(total, 38), cyan, true)
 	hLine(img, 4, 476, 27, cyan2)
 	columns := []struct {
 		x int
@@ -954,12 +993,12 @@ func (a *app) renderEvidence(img *image.RGBA, s liveState) {
 			drawText(img, 26, y+1, evidenceTime(e.Epoch), fg, true, 1)
 			drawText(img, 101, y+1, trimCells(eventShort(e.Event), 12), fg, true, 1)
 			drawText(img, 199, y+1, trimCells(displaySSID(e.SSID), 17), fg, true, 1)
-			drawText(img, 343, y+1, humanBytes(e.Size), fg, true, 1)
+			drawTextBox(img, image.Rect(343, y-1, 409, y+20), 343, y+1, trimCells(humanBytes(e.Size), 8), fg, true, 1)
 			statusColor := green
 			if i == a.evidenceSelected {
 				statusColor = black
 			}
-			drawText(img, 410, y+1, e.Status, statusColor, true, 1)
+			drawTextBox(img, image.Rect(410, y-1, 475, y+20), 410, y+1, trimCells(e.Status, 8), statusColor, true, 1)
 		}
 	}
 	hLine(img, 4, 476, 164, cyan2)
@@ -968,7 +1007,8 @@ func (a *app) renderEvidence(img *image.RGBA, s liveState) {
 	for _, x := range []int{86, 163, 241, 323, 402} {
 		vLine(img, x, 190, 219, cyan2)
 	}
-	drawButtonHint(img, 12, 197, "A", "DETAILS", white)
+	drawTextBox(img, image.Rect(5, 191, 85, 218), 9, 197, "A", green, true, 1)
+	drawTextBox(img, image.Rect(5, 191, 85, 218), 26, 197, "DETAILS", white, true, 1)
 	drawButtonHint(img, 94, 197, "B", "BACK", white)
 	a.renderer.drawIcon(img, 171, 195, "\ue5c4", 18, cyan)
 	drawText(img, 194, 198, "PAGE", white, true, 1)
@@ -976,8 +1016,8 @@ func (a *app) renderEvidence(img *image.RGBA, s liveState) {
 	drawText(img, 271, 198, "PAGE", white, true, 1)
 	a.renderer.drawIcon(img, 330, 195, "\ue5d8", 18, green)
 	drawText(img, 352, 198, "SELECT", white, true, 1)
-	a.renderer.drawIcon(img, 409, 195, "\ue5db", 18, green)
-	drawText(img, 431, 198, "SELECT", white, true, 1)
+	a.renderer.drawIcon(img, 405, 195, "\ue5db", 18, green)
+	drawTextBox(img, image.Rect(403, 191, 475, 218), 427, 198, "SELECT", white, true, 1)
 }
 
 func (a *app) renderEvidenceDetail(img *image.RGBA, s liveState) {
@@ -1012,7 +1052,7 @@ func (a *app) drawStatus(img *image.RGBA, s liveState, startX int) {
 	a.renderer.drawIcon(img, startX, 3, "\ue63e", 20, cyan)
 	a.renderer.drawIcon(img, startX+43, 3, "\ue050", 20, cyan)
 	stroke(img, image.Rect(startX+78, 5, startX+117, 22), 1, cyan)
-	drawText(img, startX+84, 6, fmt.Sprintf("%d%%", s.Battery), green, true, 1)
+	drawTextBox(img, image.Rect(startX+79, 5, startX+116, 22), startX+84, 6, trimCells(fmt.Sprintf("%d%%", s.Battery), 4), green, true, 1)
 	drawTextRight(img, 469, 5, s.Now.Format("15:04"), cyan, true)
 }
 
@@ -1050,6 +1090,50 @@ func drawText(img *image.RGBA, x, y int, text string, c color.RGBA, bold bool, s
 	}
 }
 
+func textPixelWidth(text string, scale int) int {
+	return len([]rune(text)) * textCellWidth * max(1, scale)
+}
+
+func drawTextBox(img *image.RGBA, box image.Rectangle, x, y int, text string, c color.RGBA, bold bool, scale int) {
+	box = box.Intersect(img.Bounds())
+	if box.Empty() {
+		return
+	}
+	clipped, ok := img.SubImage(box).(*image.RGBA)
+	if !ok {
+		return
+	}
+	drawText(clipped, x, y, text, c, bold, scale)
+}
+
+func drawTextFitted(img *image.RGBA, box image.Rectangle, x, y int, text string, c color.RGBA, bold bool, scale int) {
+	box = box.Intersect(img.Bounds())
+	if box.Empty() || x >= box.Max.X || y >= box.Max.Y {
+		return
+	}
+	face := font.Face(inconsolata.Regular8x16)
+	if bold {
+		face = inconsolata.Bold8x16
+	}
+	sourceWidth := max(1, len([]rune(text))*textCellWidth)
+	tmp := image.NewRGBA(image.Rect(0, 0, sourceWidth, 16))
+	d := font.Drawer{Dst: tmp, Src: image.NewUniform(c), Face: face, Dot: fixed.P(0, 13)}
+	d.DrawString(text)
+	destWidth := min(sourceWidth*max(1, scale), box.Max.X-x)
+	destHeight := 16 * max(1, scale)
+	for dy := 0; dy < destHeight && y+dy < box.Max.Y; dy++ {
+		for dx := 0; dx < destWidth && x+dx < box.Max.X; dx++ {
+			sx := dx * sourceWidth / destWidth
+			sy := dy / max(1, scale)
+			p := tmp.RGBAAt(sx, sy)
+			if p.A == 0 || (p.R == 0 && p.G == 0 && p.B == 0) {
+				continue
+			}
+			img.SetRGBA(x+dx, y+dy, c)
+		}
+	}
+}
+
 func drawTextWide(img *image.RGBA, x, y int, text string, c color.RGBA, bold bool) {
 	face := font.Face(inconsolata.Regular8x16)
 	if bold {
@@ -1075,11 +1159,16 @@ func drawTextWide(img *image.RGBA, x, y int, text string, c color.RGBA, bold boo
 }
 
 func drawTextRight(img *image.RGBA, right, y int, text string, c color.RGBA, bold bool) {
-	drawText(img, right-len([]rune(text))*8, y, text, c, bold, 1)
+	drawText(img, right-textPixelWidth(text, 1), y, text, c, bold, 1)
+}
+
+func drawTextRightBox(img *image.RGBA, box image.Rectangle, y int, text string, c color.RGBA, bold bool) {
+	text = trimCells(text, box.Dx()/textCellWidth)
+	drawTextBox(img, box, box.Max.X-textPixelWidth(text, 1), y, text, c, bold, 1)
 }
 
 func drawCentered(img *image.RGBA, y int, text string, c color.RGBA, bold bool) {
-	drawText(img, (screenWidth-len([]rune(text))*8)/2, y, text, c, bold, 1)
+	drawText(img, (screenWidth-textPixelWidth(text, 1))/2, y, text, c, bold, 1)
 }
 
 func drawMetric(img *image.RGBA, x, y int, label, value string, valueColor color.RGBA) {
@@ -1089,7 +1178,7 @@ func drawMetric(img *image.RGBA, x, y int, label, value string, valueColor color
 
 func drawMetricAt(img *image.RGBA, labelX, valueX, y int, label, value string, valueColor color.RGBA) {
 	drawText(img, labelX, y, label, white, true, 1)
-	drawText(img, valueX, y, value, valueColor, true, 1)
+	drawTextBox(img, image.Rect(valueX, y-1, 472, y+16), valueX, y, trimCells(value, (472-valueX)/textCellWidth), valueColor, true, 1)
 }
 
 func drawMetricWide(img *image.RGBA, x, y int, label, value string, valueColor color.RGBA) {
