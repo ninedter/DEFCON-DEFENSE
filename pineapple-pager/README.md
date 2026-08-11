@@ -107,9 +107,23 @@ the `pcap/` folder.
 The custom UI publishes a read-only PNG mirror on device port `1472` only while
 the application is running. An idempotent bridge in the authenticated Virtual
 Pager page displays that canvas and automatically falls back to the stock Pager
-screen when the application exits. Version 4.3 sends only changed frames using
-change-driven long polling, prevents duplicate UI instances, and clips dynamic
-text to its assigned panels. The stock page is backed up before the bridge is
+screen when the application exits. Version 4.9 starts the native renderer before
+loading monitoring libraries so the designed General screen appears at the
+beginning of a payload launch. It sends only changed frames using
+change-driven long polling, reclaims the physical display only when the native
+payload runner displaces it, routes Virtual Pager buttons directly to the app,
+admits only one button until the next rendered frame, abandons and reconnects a
+stuck long poll, restores the application immediately after page refresh, hides
+the stock login/loading panels while the application owns the screen, supports
+the same flow from the keyboard arrow/Enter/Escape keys,
+reads the six physical controls directly from the Pager input device instead of
+loading the Pager service with repeated input requests, lets the launch-confirm
+gesture finish before accepting navigation, commits the first screen
+before starting Recon/evidence workers, uses low-CPU uncompressed PNGs for the
+Virtual Pager, starts from cached safe state before any live refresh, cleans up
+UI workers on normal exit or disconnect, prevents duplicate UI instances, and
+clips dynamic text to its assigned panels. The stock page is
+backed up before the bridge is
 first installed. Measured before/after results are recorded in
 `docs/ui-v4/performance.md`. The complete normal, empty, detail, and stress-state
 containment audit is in `docs/audits/2026-08-10-text-containment/README.md`.

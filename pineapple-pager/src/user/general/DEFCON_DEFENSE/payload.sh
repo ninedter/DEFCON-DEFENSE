@@ -2,7 +2,7 @@
 # Title: DEFCON Defense
 # Description: Unified passive 2.4/5 GHz monitoring, alerting, evidence, and defensive-tool launcher.
 # Author: Henry Hu
-# Version: 4.3
+# Version: 4.9
 # Category: General
 
 PAYLOAD_ROOT="/root/payloads"
@@ -35,6 +35,91 @@ PCAP_LIB="${DEFCON_DEFENSE_PCAP_LIB:-$DIR/pcap_evidence_lib.sh}"
 if [ ! -f "$PCAP_LIB" ] && [ -f "$DIR/../../../../lib/pcap_evidence_lib.sh" ]; then
   PCAP_LIB="$DIR/../../../../lib/pcap_evidence_lib.sh"
 fi
+UI_BINARY="${DEFCON_DEFENSE_UI_BINARY:-$DIR/defcon-ui}"
+UI_STATE="$LOOT_DIR/ui_state.psv"
+UI_ACTION="$LOOT_DIR/ui_action.psv"
+UI_MUTE="$LOOT_DIR/ui_muted"
+UI_BRIDGE_SOURCE="$DIR/virtual-pager-bridge.js"
+UI_SESSION_LOCK="$LOOT_DIR/.ui_session.lock"
+CUSTOM_UI_PID=""
+CUSTOM_UI_READY=""
+CUSTOM_UI_LOCKED=0
+EARLY_UI_STARTED=0
+
+early_custom_ui_lock_acquire() {
+  local owner="" ui_owner=""
+  if mkdir "$UI_SESSION_LOCK" 2>/dev/null; then
+    printf '%s\n' "$$" > "$UI_SESSION_LOCK/pid"
+    CUSTOM_UI_LOCKED=1
+    return 0
+  fi
+  [ -f "$UI_SESSION_LOCK/pid" ] && owner="$(cat "$UI_SESSION_LOCK/pid" 2>/dev/null)"
+  [ -n "$owner" ] || return 1
+  if printf '%s' "$owner" | grep -Eq '^[0-9]+$' && kill -0 "$owner" 2>/dev/null; then
+    return 1
+  fi
+  [ -f "$UI_SESSION_LOCK/ui_pid" ] && ui_owner="$(cat "$UI_SESSION_LOCK/ui_pid" 2>/dev/null)"
+  if printf '%s' "$ui_owner" | grep -Eq '^[0-9]+$' && kill -0 "$ui_owner" 2>/dev/null; then
+    kill "$ui_owner" 2>/dev/null || true
+    for _ in 1 2 3 4 5; do
+      kill -0 "$ui_owner" 2>/dev/null || break
+      sleep 0.1
+    done
+    kill -0 "$ui_owner" 2>/dev/null && kill -9 "$ui_owner" 2>/dev/null || true
+  fi
+  rm -f "$UI_SESSION_LOCK/pid" "$UI_SESSION_LOCK/ui_pid" 2>/dev/null || true
+  rmdir "$UI_SESSION_LOCK" 2>/dev/null || return 1
+  mkdir "$UI_SESSION_LOCK" 2>/dev/null || return 1
+  printf '%s\n' "$$" > "$UI_SESSION_LOCK/pid"
+  CUSTOM_UI_LOCKED=1
+}
+
+early_custom_ui_cleanup() {
+  if [ -n "$CUSTOM_UI_PID" ] && kill -0 "$CUSTOM_UI_PID" 2>/dev/null; then
+    kill "$CUSTOM_UI_PID" 2>/dev/null || true
+    wait "$CUSTOM_UI_PID" 2>/dev/null || true
+  fi
+  [ -z "$CUSTOM_UI_READY" ] || rm -f "$CUSTOM_UI_READY"
+  if [ "$CUSTOM_UI_LOCKED" = "1" ]; then
+    rm -f "$UI_SESSION_LOCK/pid" "$UI_SESSION_LOCK/ui_pid" 2>/dev/null || true
+    rmdir "$UI_SESSION_LOCK" 2>/dev/null || true
+    CUSTOM_UI_LOCKED=0
+  fi
+}
+
+start_custom_ui_early() {
+  [ "${DEFCON_DEFENSE_SOURCE_ONLY:-0}" != "1" ] || return 0
+  [ "${DEFCON_DEFENSE_NATIVE_UI:-1}" = "1" ] || return 0
+  [ -x "$UI_BINARY" ] && [ -w /dev/fb0 ] || return 0
+  mkdir -p "$LOOT_DIR" "$PCAP_DIR"
+  early_custom_ui_lock_acquire || return 0
+  CUSTOM_UI_READY="$LOOT_DIR/.ui_ready.$$"
+  rm -f "$CUSTOM_UI_READY"
+  "$UI_BINARY" \
+    --framebuffer /dev/fb0 \
+    --input-device /dev/input/event0 \
+    --ready-file "$CUSTOM_UI_READY" \
+    --data-dir "$LOOT_DIR" \
+    --pcap-dir "$PCAP_DIR" \
+    --action-file "$UI_ACTION" \
+    --mute-file "$UI_MUTE" &
+  CUSTOM_UI_PID=$!
+  printf '%s\n' "$CUSTOM_UI_PID" > "$UI_SESSION_LOCK/ui_pid"
+  if kill -0 "$CUSTOM_UI_PID" 2>/dev/null; then
+    EARLY_UI_STARTED=1
+    trap early_custom_ui_cleanup EXIT
+    trap 'early_custom_ui_cleanup; exit 130' INT
+    trap 'early_custom_ui_cleanup; exit 143' TERM
+    trap 'early_custom_ui_cleanup; exit 129' HUP
+  else
+    early_custom_ui_cleanup
+  fi
+}
+
+# Start the native renderer before loading the monitoring libraries. This makes
+# the first designed frame the payload's immediate response while the shell
+# continues preparing Recon, PCAP, and background-worker functions behind it.
+start_custom_ui_early
 
 # Fatigue-resistant defaults for a crowded venue.
 MONITOR_INTERVAL=15
@@ -63,12 +148,6 @@ PCAP_EVIDENCE_INDEX="$LOOT_DIR/pcap_index.tsv"
 PCAP_EVIDENCE_STATE="$LOOT_DIR/pcap_capture.psv"
 PCAP_EVIDENCE_DEDUPE="$LOOT_DIR/pcap_dedupe.psv"
 PCAP_EVIDENCE_LOCK="$LOOT_DIR/.pcap_capture.lock"
-UI_BINARY="${DEFCON_DEFENSE_UI_BINARY:-$DIR/defcon-ui}"
-UI_STATE="$LOOT_DIR/ui_state.psv"
-UI_ACTION="$LOOT_DIR/ui_action.psv"
-UI_MUTE="$LOOT_DIR/ui_muted"
-UI_BRIDGE_SOURCE="$DIR/virtual-pager-bridge.js"
-UI_SESSION_LOCK="$LOOT_DIR/.ui_session.lock"
 pcap_evidence_configure
 mkdir -p "$LOOT_DIR" "$PCAP_DIR"
 
@@ -80,7 +159,9 @@ BACKGROUND_MONITOR_PID=""
 CUSTOM_UI_BACKEND_PID=""
 CUSTOM_UI_ACTION_PID=""
 CUSTOM_UI_BRIDGE_PID=""
-CUSTOM_UI_LOCKED=0
+CUSTOM_UI_PID="${CUSTOM_UI_PID:-}"
+CUSTOM_UI_READY="${CUSTOM_UI_READY:-}"
+CUSTOM_UI_LOCKED="${CUSTOM_UI_LOCKED:-0}"
 MONITOR_PAUSE_FILE="$LOOT_DIR/.background_monitor_pause"
 
 cleanup_focused_monitor() {
@@ -110,6 +191,13 @@ cleanup_focused_monitor() {
 }
 
 cleanup_background_monitor() {
+  if [ -n "$CUSTOM_UI_PID" ] && kill -0 "$CUSTOM_UI_PID" 2>/dev/null; then
+    kill "$CUSTOM_UI_PID" 2>/dev/null || true
+    wait "$CUSTOM_UI_PID" 2>/dev/null || true
+  fi
+  CUSTOM_UI_PID=""
+  [ -z "$CUSTOM_UI_READY" ] || rm -f "$CUSTOM_UI_READY"
+  CUSTOM_UI_READY=""
   if [ -n "$BACKGROUND_MONITOR_PID" ] && kill -0 "$BACKGROUND_MONITOR_PID" 2>/dev/null; then
     kill "$BACKGROUND_MONITOR_PID" 2>/dev/null || true
     wait "$BACKGROUND_MONITOR_PID" 2>/dev/null || true
@@ -135,7 +223,7 @@ cleanup_background_monitor() {
 }
 
 custom_ui_lock_acquire() {
-  local owner=""
+  local owner="" ui_owner=""
   if mkdir "$UI_SESSION_LOCK" 2>/dev/null; then
     printf '%s\n' "$$" > "$UI_SESSION_LOCK/pid"
     CUSTOM_UI_LOCKED=1
@@ -148,7 +236,19 @@ custom_ui_lock_acquire() {
   if printf '%s' "$owner" | grep -Eq '^[0-9]+$' && kill -0 "$owner" 2>/dev/null; then
     return 1
   fi
-  rm -f "$UI_SESSION_LOCK/pid" 2>/dev/null || true
+  # If the owning shell died, terminate only the UI child recorded by that
+  # session before replacing the stale lock. This prevents an orphan renderer
+  # from competing with the next menu launch for the framebuffer.
+  [ -f "$UI_SESSION_LOCK/ui_pid" ] && ui_owner="$(cat "$UI_SESSION_LOCK/ui_pid" 2>/dev/null)"
+  if printf '%s' "$ui_owner" | grep -Eq '^[0-9]+$' && kill -0 "$ui_owner" 2>/dev/null; then
+    kill "$ui_owner" 2>/dev/null || true
+    for _ in 1 2 3 4 5; do
+      kill -0 "$ui_owner" 2>/dev/null || break
+      sleep 0.1
+    done
+    kill -0 "$ui_owner" 2>/dev/null && kill -9 "$ui_owner" 2>/dev/null || true
+  fi
+  rm -f "$UI_SESSION_LOCK/pid" "$UI_SESSION_LOCK/ui_pid" 2>/dev/null || true
   rmdir "$UI_SESSION_LOCK" 2>/dev/null || return 1
   mkdir "$UI_SESSION_LOCK" 2>/dev/null || return 1
   printf '%s\n' "$$" > "$UI_SESSION_LOCK/pid"
@@ -157,7 +257,7 @@ custom_ui_lock_acquire() {
 
 custom_ui_lock_release() {
   [ "$CUSTOM_UI_LOCKED" = "1" ] || return 0
-  rm -f "$UI_SESSION_LOCK/pid" 2>/dev/null || true
+  rm -f "$UI_SESSION_LOCK/pid" "$UI_SESSION_LOCK/ui_pid" 2>/dev/null || true
   rmdir "$UI_SESSION_LOCK" 2>/dev/null || true
   CUSTOM_UI_LOCKED=0
 }
@@ -170,6 +270,7 @@ cleanup_defcon_defense() {
 trap cleanup_defcon_defense EXIT
 trap 'cleanup_defcon_defense; exit 130' INT
 trap 'cleanup_defcon_defense; exit 143' TERM
+trap 'cleanup_defcon_defense; exit 129' HUP
 
 wait_for_input_or_timeout() { # timeout_seconds
   # WAIT_FOR_INPUT ignores numeric arguments on Pager firmware and blocks until
@@ -464,6 +565,7 @@ write_custom_ui_state() {
 }
 
 custom_ui_backend_loop() {
+  set_recon_bands || true
   while true; do
     if capture_snapshot 1; then
       analyze_snapshot 1
@@ -521,7 +623,7 @@ install_virtual_pager_bridge() {
   local tmp="$ui_root/index.html.defcon-defense.tmp"
   [ -f "$UI_BRIDGE_SOURCE" ] && [ -f "$index" ] || return 1
   cp "$UI_BRIDGE_SOURCE" "$target" || return 1
-  if grep -Fq '__defconDefenseBridgeVersion = "4.2.3"' "$index"; then
+  if grep -Fq '__defconDefenseBridgeVersion = "4.3.1"' "$index"; then
     return 0
   fi
   [ -f "$ui_root/index.html.defcon-defense-backup" ] || \
@@ -543,25 +645,46 @@ d
 }
 
 custom_ui_session() {
-  if ! custom_ui_lock_acquire; then
-    return 0
+  local ui_rc=0 ready_checks=0
+  if [ -z "$CUSTOM_UI_PID" ] || ! kill -0 "$CUSTOM_UI_PID" 2>/dev/null; then
+    CUSTOM_UI_PID=""
+    if ! custom_ui_lock_acquire; then
+      return 0
+    fi
+    CUSTOM_UI_READY="$LOOT_DIR/.ui_ready.$$"
+    rm -f "$CUSTOM_UI_READY"
+    "$UI_BINARY" \
+      --framebuffer /dev/fb0 \
+      --input-device /dev/input/event0 \
+      --ready-file "$CUSTOM_UI_READY" \
+      --data-dir "$LOOT_DIR" \
+      --pcap-dir "$PCAP_DIR" \
+      --action-file "$UI_ACTION" \
+      --mute-file "$UI_MUTE" &
+    CUSTOM_UI_PID=$!
+    printf '%s\n' "$CUSTOM_UI_PID" > "$UI_SESSION_LOCK/ui_pid"
   fi
-  set_recon_bands || true
-  # Render immediately from the last good state. Recon refresh belongs in the
-  # background so the operator never waits at a blank stock payload screen.
-  write_custom_ui_state
+  # The early renderer is already visible. Bridge installation, Recon,
+  # evidence import, and action workers stay behind that first frame.
   install_virtual_pager_bridge >/dev/null 2>&1 &
   CUSTOM_UI_BRIDGE_PID=$!
-  custom_ui_backend_loop >/dev/null 2>&1 &
-  CUSTOM_UI_BACKEND_PID=$!
-  custom_ui_action_loop >/dev/null 2>&1 &
-  CUSTOM_UI_ACTION_PID=$!
-  "$UI_BINARY" \
-    --framebuffer /dev/fb0 \
-    --data-dir "$LOOT_DIR" \
-    --pcap-dir "$PCAP_DIR" \
-    --action-file "$UI_ACTION" \
-    --mute-file "$UI_MUTE"
+  while kill -0 "$CUSTOM_UI_PID" 2>/dev/null && [ ! -s "$CUSTOM_UI_READY" ] && [ "$ready_checks" -lt 100 ]; do
+    sleep 0.02
+    ready_checks=$((ready_checks + 1))
+  done
+  if kill -0 "$CUSTOM_UI_PID" 2>/dev/null; then
+    custom_ui_backend_loop >/dev/null 2>&1 &
+    CUSTOM_UI_BACKEND_PID=$!
+    custom_ui_action_loop >/dev/null 2>&1 &
+    CUSTOM_UI_ACTION_PID=$!
+  fi
+  wait "$CUSTOM_UI_PID"
+  ui_rc=$?
+  CUSTOM_UI_PID=""
+  rm -f "$CUSTOM_UI_READY"
+  CUSTOM_UI_READY=""
+  rm -f "$UI_SESSION_LOCK/ui_pid" 2>/dev/null || true
+  return "$ui_rc"
 }
 
 AP_BSSIDS=()
@@ -1420,3 +1543,8 @@ if [ "${DEFCON_DEFENSE_NATIVE_UI:-1}" = "1" ] && [ -x "$UI_BINARY" ] && [ -w /de
 else
   general_screen
 fi
+
+# Bash can wait for background jobs before running an EXIT trap at normal EOF.
+# Clean up explicitly so B exits the UI, monitor workers, and session lock as
+# one transaction instead of leaving the payload runner alive behind the menu.
+cleanup_defcon_defense

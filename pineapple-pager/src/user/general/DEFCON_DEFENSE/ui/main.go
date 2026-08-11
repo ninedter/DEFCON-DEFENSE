@@ -2,14 +2,15 @@
 //
 // The Pager exposes a 222x480 RGB565 framebuffer rotated counter-clockwise
 // onto its 480x222 landscape LCD. This application renders a 480x222 canvas,
-// maps it into the device framebuffer, and receives both physical and Virtual
-// Pager buttons through the firmware WAIT_FOR_INPUT command.
+// maps it into the device framebuffer, and receives physical buttons directly
+// from evdev plus Virtual Pager buttons through the local HTTP bridge.
 package main
 
 import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/csv"
 	"errors"
 	"flag"
@@ -21,7 +22,6 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"sort"
@@ -44,6 +44,11 @@ const (
 	fbHeight      = 480
 	frameBytes    = fbWidth * fbHeight * 2
 	textCellWidth = 8
+
+	frameRowBytes         = fbWidth * 2
+	ownershipSampleBytes  = 512
+	ownershipPollInterval = 50 * time.Millisecond
+	inputStartupDelay     = 1200 * time.Millisecond
 
 	passiveCaptureLabel   = "PASSIVE CAPTURE:"
 	passiveCaptureLabelX  = 244
@@ -110,6 +115,7 @@ type renderer struct {
 type app struct {
 	dataDir, pcapDir, actionFile, muteFile string
 	framebuffer, previewDir                string
+	inputDevice, readyFile                 string
 	virtualListen                          string
 	preview                                bool
 	renderer                               *renderer
@@ -130,6 +136,7 @@ type app struct {
 	toastUntil       time.Time
 	lastButton       string
 	lastButtonAt     time.Time
+	displayedFrame   []byte
 }
 
 func main() {
@@ -140,6 +147,8 @@ func main() {
 	flag.StringVar(&a.actionFile, "action-file", "", "action queue file")
 	flag.StringVar(&a.muteFile, "mute-file", "", "alert mute state file")
 	flag.StringVar(&a.framebuffer, "framebuffer", "/dev/fb0", "Pager framebuffer")
+	flag.StringVar(&a.inputDevice, "input-device", "/dev/input/event0", "Pager evdev button device")
+	flag.StringVar(&a.readyFile, "ready-file", "", "write after the first physical and Virtual Pager frames are ready")
 	flag.StringVar(&a.previewDir, "preview-dir", "", "render the three reference states as PNG files")
 	flag.StringVar(&a.virtualListen, "virtual-listen", ":1472", "Virtual Pager bridge listen address")
 	flag.StringVar(&materialPath, "material-font", "/pineapple/ui/MaterialIcons-Regular.ttf", "Material Icons font path")
@@ -253,7 +262,7 @@ func (a *app) renderPreviews() error {
 }
 
 func (a *app) run() error {
-	fb, err := os.OpenFile(a.framebuffer, os.O_WRONLY, 0)
+	fb, err := os.OpenFile(a.framebuffer, os.O_RDWR, 0)
 	if err != nil {
 		return fmt.Errorf("open framebuffer: %w", err)
 	}
@@ -261,21 +270,45 @@ func (a *app) run() error {
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 	defer cancel()
+	// Keep only one unhandled press. The browser bridge also waits for the next
+	// rendered revision before accepting another control, so accidental double
+	// clicks cannot skip a screen or leave navigation apparently stuck.
+	buttons := make(chan string, 1)
 	if a.virtualListen != "" {
-		go a.serveVirtualPager(ctx)
+		go a.serveVirtualPager(ctx, buttons)
 	}
-	buttons := make(chan string, 4)
-	go readButtons(ctx, buttons)
+	go func() {
+		// The A press that confirms the native payload launch can still be in the
+		// Pager service's input path when this process opens evdev. Let that launch
+		// gesture finish so every new session reliably starts on General instead
+		// of accidentally opening Threat Details.
+		timer := time.NewTimer(inputStartupDelay)
+		defer timer.Stop()
+		select {
+		case <-timer.C:
+			readButtons(ctx, a.inputDevice, buttons)
+		case <-ctx.Done():
+		}
+	}()
 
 	stateTicker := time.NewTicker(time.Second)
 	defer stateTicker.Stop()
+	ownershipTicker := time.NewTicker(ownershipPollInterval)
+	defer ownershipTicker.Stop()
 
 	state := a.loadState()
 	stateFingerprint := a.stateFingerprint()
 	displayedMinute := state.Now.Format("15:04")
 	var displayedPixels []byte
+	var framebufferScratch []byte
 	if err := a.updateDisplay(fb, state, &displayedPixels); err != nil {
 		return err
+	}
+	if a.readyFile != "" {
+		if err := os.WriteFile(a.readyFile, []byte("ready\n"), 0o600); err != nil {
+			return fmt.Errorf("write ready file: %w", err)
+		}
+		defer os.Remove(a.readyFile)
 	}
 	for {
 		select {
@@ -304,6 +337,13 @@ func (a *app) run() error {
 					return err
 				}
 				displayedMinute = state.Now.Format("15:04")
+			}
+		case <-ownershipTicker.C:
+			// The native payload runner paints its completion screen after this
+			// application starts. Reclaim the display only when that renderer (or
+			// another process) has displaced our already-rendered RGB565 frame.
+			if err := maintainDisplayOwnership(fb, a.displayedFrame, &framebufferScratch); err != nil {
+				return err
 			}
 		}
 	}
@@ -352,20 +392,63 @@ func (a *app) updateDisplay(fb io.WriteSeeker, state liveState, displayedPixels 
 		return nil
 	}
 	*displayedPixels = append((*displayedPixels)[:0], canvas.Pix...)
-	a.publishPNG(canvas)
 	frame := canvasToFramebuffer(canvas)
+	if err := writeFramebuffer(fb, frame); err != nil {
+		return err
+	}
+	a.displayedFrame = append(a.displayedFrame[:0], frame...)
+	// The physical display is the operator's primary surface. Commit it before
+	// encoding the Virtual Pager image so a slow CPU can never strand the user
+	// on the stock Payload Running/Complete screen.
+	a.publishPNG(canvas)
+	return nil
+}
+
+func maintainDisplayOwnership(fb io.ReadWriteSeeker, expected []byte, scratch *[]byte) error {
+	if len(expected) == 0 {
+		return nil
+	}
+	// One raw framebuffer row maps to one full-height canvas column. Sampling
+	// the center row therefore checks the title, content, controls, and footer
+	// in one small read while remaining sensitive to a stock full-screen repaint.
+	offset := (screenWidth / 2) * frameRowBytes
+	if cap(*scratch) < ownershipSampleBytes {
+		*scratch = make([]byte, ownershipSampleBytes)
+	} else {
+		*scratch = (*scratch)[:ownershipSampleBytes]
+	}
+	if _, err := fb.Seek(int64(offset), io.SeekStart); err != nil {
+		return fmt.Errorf("seek framebuffer for ownership check: %w", err)
+	}
+	if _, err := io.ReadFull(fb, *scratch); err != nil {
+		return fmt.Errorf("read framebuffer for ownership check: %w", err)
+	}
+	if !bytes.Equal(*scratch, expected[offset:offset+ownershipSampleBytes]) {
+		return writeFramebuffer(fb, expected)
+	}
+	return nil
+}
+
+func writeFramebuffer(fb io.WriteSeeker, frame []byte) error {
 	if _, err := fb.Seek(0, io.SeekStart); err != nil {
 		return fmt.Errorf("seek framebuffer: %w", err)
 	}
-	if _, err := fb.Write(frame); err != nil {
+	written, err := fb.Write(frame)
+	if err != nil {
 		return fmt.Errorf("write framebuffer: %w", err)
+	}
+	if written != len(frame) {
+		return io.ErrShortWrite
 	}
 	return nil
 }
 
 func (a *app) publishPNG(img image.Image) {
 	var b bytes.Buffer
-	encoder := png.Encoder{CompressionLevel: png.BestSpeed}
+	// The screen is tiny and only changes on interaction/state updates. Avoid
+	// spending scarce Pager CPU on compression; USB transfer is faster than the
+	// MIPS encoder and this makes the Virtual Pager frame available promptly.
+	encoder := png.Encoder{CompressionLevel: png.NoCompression}
 	if encoder.Encode(&b, img) != nil {
 		return
 	}
@@ -380,7 +463,7 @@ func (a *app) publishPNG(img image.Image) {
 	a.webMu.Unlock()
 }
 
-func (a *app) serveVirtualPager(ctx context.Context) {
+func (a *app) serveVirtualPager(ctx context.Context, buttons chan<- string) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
@@ -430,6 +513,7 @@ func (a *app) serveVirtualPager(ctx context.Context) {
 			return
 		}
 	})
+	mux.HandleFunc("/button", virtualButtonHandler(buttons))
 	server := &http.Server{Addr: a.virtualListen, Handler: mux, ReadHeaderTimeout: 2 * time.Second}
 	go func() {
 		<-ctx.Done()
@@ -440,26 +524,114 @@ func (a *app) serveVirtualPager(ctx context.Context) {
 	_ = server.ListenAndServe()
 }
 
-func readButtons(ctx context.Context, out chan<- string) {
-	for ctx.Err() == nil {
-		cmd := exec.CommandContext(ctx, "WAIT_FOR_INPUT")
-		b, err := cmd.Output()
-		if ctx.Err() != nil {
+func virtualButtonHandler(buttons chan<- string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
+		w.Header().Set("Cache-Control", "no-store")
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
 			return
 		}
-		if err != nil {
-			time.Sleep(150 * time.Millisecond)
-			continue
+		if r.Method != http.MethodPost {
+			http.Error(w, "POST required", http.StatusMethodNotAllowed)
+			return
 		}
-		button := normalizeButton(string(b))
+		button := normalizeButton(r.URL.Query().Get("name"))
 		switch button {
 		case "A", "B", "UP", "DOWN", "LEFT", "RIGHT":
-			select {
-			case out <- button:
-			case <-ctx.Done():
-				return
-			}
+		default:
+			http.Error(w, "invalid button", http.StatusBadRequest)
+			return
 		}
+		select {
+		case buttons <- button:
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			http.Error(w, "button queue busy", http.StatusServiceUnavailable)
+		}
+	}
+}
+
+func readButtons(ctx context.Context, inputDevice string, out chan<- string) {
+	for ctx.Err() == nil {
+		if err := readButtonDevice(ctx, inputDevice, out); ctx.Err() != nil {
+			return
+		} else if err == nil {
+			continue
+		}
+		timer := time.NewTimer(2 * time.Second)
+		select {
+		case <-timer.C:
+		case <-ctx.Done():
+			timer.Stop()
+			return
+		}
+	}
+}
+
+func readButtonDevice(ctx context.Context, inputDevice string, out chan<- string) error {
+	f, err := os.Open(inputDevice)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	done := make(chan struct{})
+	defer close(done)
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = f.Close()
+		case <-done:
+		}
+	}()
+
+	// Linux input_event is 16 bytes on the Pager's 32-bit MIPS userspace and
+	// 24 bytes on a 64-bit test host because timeval follows native word size.
+	eventSize, typeOffset := 16, 8
+	if strconv.IntSize == 64 {
+		eventSize, typeOffset = 24, 16
+	}
+	event := make([]byte, eventSize)
+	for {
+		if _, err := io.ReadFull(f, event); err != nil {
+			return err
+		}
+		eventType := binary.LittleEndian.Uint16(event[typeOffset : typeOffset+2])
+		code := binary.LittleEndian.Uint16(event[typeOffset+2 : typeOffset+4])
+		value := int32(binary.LittleEndian.Uint32(event[typeOffset+4 : typeOffset+8]))
+		if eventType != 1 || value != 1 {
+			continue
+		}
+		button := buttonForLinuxKey(code)
+		if button == "" {
+			continue
+		}
+		select {
+		case out <- button:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+}
+
+func buttonForLinuxKey(code uint16) string {
+	switch code {
+	case 304: // BTN_SOUTH
+		return "A"
+	case 305: // BTN_EAST
+		return "B"
+	case 103: // KEY_UP
+		return "UP"
+	case 108: // KEY_DOWN
+		return "DOWN"
+	case 105: // KEY_LEFT
+		return "LEFT"
+	case 106: // KEY_RIGHT
+		return "RIGHT"
+	default:
+		return ""
 	}
 }
 

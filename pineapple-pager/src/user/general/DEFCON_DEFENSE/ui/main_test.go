@@ -1,13 +1,51 @@
 package main
 
 import (
+	"bytes"
+	"context"
+	"encoding/binary"
 	"image"
 	"image/color"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 )
+
+type memoryReadWriteSeeker struct {
+	data   []byte
+	reader *bytes.Reader
+	writes int
+}
+
+func newMemoryReadWriteSeeker(data []byte) *memoryReadWriteSeeker {
+	copyData := append([]byte(nil), data...)
+	return &memoryReadWriteSeeker{data: copyData, reader: bytes.NewReader(copyData)}
+}
+
+func (m *memoryReadWriteSeeker) Read(p []byte) (int, error) {
+	return m.reader.Read(p)
+}
+
+func (m *memoryReadWriteSeeker) Write(p []byte) (int, error) {
+	m.writes++
+	position, _ := m.reader.Seek(0, io.SeekCurrent)
+	end := int(position) + len(p)
+	if end > len(m.data) {
+		m.data = append(m.data, make([]byte, end-len(m.data))...)
+	}
+	copy(m.data[int(position):end], p)
+	m.reader = bytes.NewReader(m.data)
+	_, _ = m.reader.Seek(int64(end), io.SeekStart)
+	return len(p), nil
+}
+
+func (m *memoryReadWriteSeeker) Seek(offset int64, whence int) (int64, error) {
+	return m.reader.Seek(offset, whence)
+}
 
 type countingWriteSeeker struct {
 	writes int
@@ -71,6 +109,107 @@ func TestNormalizeButton(t *testing.T) {
 	}
 }
 
+func TestPagerLinuxKeyMapping(t *testing.T) {
+	tests := map[uint16]string{
+		304: "A",
+		305: "B",
+		103: "UP",
+		108: "DOWN",
+		105: "LEFT",
+		106: "RIGHT",
+		116: "",
+	}
+	for code, want := range tests {
+		if got := buttonForLinuxKey(code); got != want {
+			t.Fatalf("buttonForLinuxKey(%d) = %q, want %q", code, got, want)
+		}
+	}
+}
+
+func TestDirectPagerInputAndFullNavigationFlow(t *testing.T) {
+	inputPath := filepath.Join(t.TempDir(), "event0")
+	eventSize, typeOffset := 16, 8
+	if strconv.IntSize == 64 {
+		eventSize, typeOffset = 24, 16
+	}
+	event := func(code uint16, value int32) []byte {
+		b := make([]byte, eventSize)
+		binary.LittleEndian.PutUint16(b[typeOffset:typeOffset+2], 1)
+		binary.LittleEndian.PutUint16(b[typeOffset+2:typeOffset+4], code)
+		binary.LittleEndian.PutUint32(b[typeOffset+4:typeOffset+8], uint32(value))
+		return b
+	}
+	data := append(event(304, 1), event(304, 0)...)
+	data = append(data, event(108, 1)...)
+	data = append(data, event(108, 0)...)
+	data = append(data, event(305, 1)...)
+	if err := os.WriteFile(inputPath, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	buttons := make(chan string, 3)
+	if err := readButtonDevice(context.Background(), inputPath, buttons); err != io.EOF {
+		t.Fatalf("readButtonDevice error = %v, want EOF", err)
+	}
+	for i, want := range []string{"A", "DOWN", "B"} {
+		select {
+		case got := <-buttons:
+			if got != want {
+				t.Fatalf("button %d = %q, want %q", i, got, want)
+			}
+		default:
+			t.Fatalf("button %d missing, want %q", i, want)
+		}
+	}
+
+	a := &app{screen: screenGeneral}
+	state := previewState()
+	if a.handleButton("DOWN", state) || a.generalSelected != 1 {
+		t.Fatalf("DOWN selected %d, want 1", a.generalSelected)
+	}
+	if a.handleButton("UP", state) || a.generalSelected != 0 {
+		t.Fatalf("UP selected %d, want 0", a.generalSelected)
+	}
+	if a.handleButton("A", state) || a.screen != screenThreat {
+		t.Fatalf("A opened screen %d, want threat", a.screen)
+	}
+	if a.handleButton("RIGHT", state) || a.screen != screenEvidence {
+		t.Fatalf("RIGHT opened screen %d, want evidence", a.screen)
+	}
+	if a.handleButton("A", state) || a.screen != screenEvidenceDetail {
+		t.Fatalf("A opened screen %d, want evidence detail", a.screen)
+	}
+	if a.handleButton("B", state) || a.screen != screenEvidence {
+		t.Fatalf("B returned to screen %d, want evidence", a.screen)
+	}
+	a.lastButton = ""
+	if a.handleButton("B", state) || a.screen != screenGeneral {
+		t.Fatalf("B returned to screen %d, want general", a.screen)
+	}
+	a.lastButton = ""
+	if !a.handleButton("B", state) {
+		t.Fatal("B on general did not exit")
+	}
+}
+
+func TestVirtualButtonHandlerQueuesPagerNavigation(t *testing.T) {
+	buttons := make(chan string, 1)
+	req := httptest.NewRequest(http.MethodPost, "/button?name=ArrowDown", nil)
+	res := httptest.NewRecorder()
+	virtualButtonHandler(buttons).ServeHTTP(res, req)
+
+	if res.Code != http.StatusNoContent {
+		t.Fatalf("button status = %d, want %d", res.Code, http.StatusNoContent)
+	}
+	select {
+	case got := <-buttons:
+		if got != "DOWN" {
+			t.Fatalf("queued button = %q, want DOWN", got)
+		}
+	default:
+		t.Fatal("virtual button was not queued")
+	}
+}
+
 func TestUpdateDisplaySkipsIdenticalFrames(t *testing.T) {
 	a := &app{renderer: newRenderer("")}
 	state := previewState()
@@ -96,6 +235,31 @@ func TestUpdateDisplaySkipsIdenticalFrames(t *testing.T) {
 	}
 	if writer.writes != 2 || a.webRevision != 2 {
 		t.Fatalf("changed frame writes/revisions = %d/%d, want 2/2", writer.writes, a.webRevision)
+	}
+}
+
+func TestMaintainDisplayOwnershipOnlyRewritesDisplacedFrame(t *testing.T) {
+	expected := bytes.Repeat([]byte{0x5a}, frameBytes)
+	framebuffer := newMemoryReadWriteSeeker(expected)
+	var scratch []byte
+
+	if err := maintainDisplayOwnership(framebuffer, expected, &scratch); err != nil {
+		t.Fatal(err)
+	}
+	if framebuffer.writes != 0 {
+		t.Fatalf("owned frame wrote %d times, want 0", framebuffer.writes)
+	}
+
+	framebuffer.data[frameBytes/2] = 0x00
+	framebuffer.reader = bytes.NewReader(framebuffer.data)
+	if err := maintainDisplayOwnership(framebuffer, expected, &scratch); err != nil {
+		t.Fatal(err)
+	}
+	if framebuffer.writes != 1 {
+		t.Fatalf("displaced frame wrote %d times, want 1", framebuffer.writes)
+	}
+	if !bytes.Equal(framebuffer.data, expected) {
+		t.Fatal("displaced framebuffer was not restored exactly")
 	}
 }
 
