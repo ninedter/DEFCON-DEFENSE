@@ -37,9 +37,9 @@ Both custom payloads move out of the crowded `user/general` menu into a new cate
 - DEFCON Defense's loot directory stays `/root/loot/defcon_defense` so existing baselines,
   watched networks, findings, and the PCAP index keep working.
 - The Pager menu only shows categories listed in `/etc/config/payloads`
-  (`list payloaddir 'user/...'`). Folders on disk that are not listed (e.g.
+  (`list payloaddir 'user/...'` in the anonymous `directories` section, addressed as `payloads.@directories[0]`). Folders on disk that are not listed (e.g.
   `user/examples`, `user/known_unstable`) are hidden. Installation must therefore add
-  `user/defcon` with `uci add_list payloads.directories.payloaddir='user/defcon'` and
+  `user/defcon` with `uci add_list 'payloads.@directories[0].payloaddir=user/defcon'` and
   `uci commit payloads`. A firmware update may reset this list; re-running the deploy
   script restores it.
 
@@ -264,7 +264,7 @@ Run from the Mac with the Pager on USB (`root@172.16.52.1`, key-based SSH):
 1. `./build.sh` (fresh `library/`).
 2. Copy `library/user/defcon/` to `/mmc/root/payloads/user/defcon/` (the previous folder is backed up, see step 3).
 3. Move the old `/mmc/root/payloads/user/general/DEFCON_DEFENSE` (and any previous `user/defcon`) to `/mmc/root/payload-backups/<timestamp>/` instead of removing it.
-4. Register the category if missing: `uci add_list payloads.directories.payloaddir='user/defcon'`
+4. Register the category if missing: `uci add_list 'payloads.@directories[0].payloaddir=user/defcon'`
    and `uci commit payloads`.
 5. Print what changed. `--dry-run` prints the commands without running them.
 

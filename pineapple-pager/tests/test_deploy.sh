@@ -31,8 +31,10 @@ bash -n "$ROOT/deploy.sh"; assert_rc "$?" "0" "deploy.sh passes bash -n"
 out="$(PAGER_LIBRARY="$LIB" PAGER_SSH="$FAKE_SSH" bash "$ROOT/deploy.sh" --skip-build --dry-run)"
 assert_rc "$?" "0" "dry run succeeds"
 [ ! -f "$FAKE_SSH_ARGS" ]; assert_rc "$?" "0" "dry run does not contact the Pager"
-printf '%s' "$out" | grep -q "uci add_list payloads.directories.payloaddir='user/defcon'"
+printf '%s' "$out" | grep -qF "uci add_list 'payloads.@directories[0].payloaddir=user/defcon'"
 assert_rc "$?" "0" "dry run shows the category registration"
+printf '%s' "$out" | grep -qF 'payloads.@directories[0].payloaddir' && ! printf '%s' "$out" | grep -qF 'payloads.directories.payloaddir'
+assert_rc "$?" "0" "remote script uses the anonymous directories section"
 printf '%s' "$out" | grep -q 'general/DEFCON_DEFENSE'
 assert_rc "$?" "0" "dry run shows the old DEFCON_DEFENSE copy being handled"
 printf '%s' "$out" | grep -q 'payload-backups'
@@ -60,9 +62,12 @@ echo "old" > "$PR/user/defcon/RF-BUDDY/payload.sh"
 cat > "$STUBS/uci" <<'EOT'
 #!/bin/bash
 printf '%s\n' "$*" >> "$UCI_CALLS"
-case "$1 $2" in
-  "-q get") cat "$UCI_LIST" ;;
-  "add_list payloads.directories.payloaddir=user/defcon") printf 'user/defcon\n' >> "$UCI_LIST" ;;
+P='payloads.@directories[0].payloaddir'
+case "$1 $2 $3" in
+  "-q get $P") cat "$UCI_LIST"; exit 0 ;;
+  "add_list $P=user/defcon "*|"add_list $P=user/defcon") printf 'user/defcon\n' >> "$UCI_LIST"; exit 0 ;;
+  "commit payloads "*) exit 0 ;;
+  "get "*|"-q get "*|"add_list "*) echo "uci: Invalid argument" >&2; exit 1 ;;
 esac
 exit 0
 EOT

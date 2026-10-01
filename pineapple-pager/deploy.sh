@@ -50,8 +50,8 @@ if [ -d general/DEFCON_DEFENSE ]; then
   echo \"moved old user/general/DEFCON_DEFENSE to \$BK\"
 fi
 if [ \"\$BACKED_UP\" = 1 ]; then echo \"backup: \$BK\"; fi
-if ! uci -q get payloads.directories.payloaddir | tr ' ' '\n' | grep -qx 'user/defcon'; then
-  uci add_list payloads.directories.payloaddir='user/defcon'
+if ! uci -q get 'payloads.@directories[0].payloaddir' | tr ' ' '\n' | grep -qx 'user/defcon'; then
+  uci add_list 'payloads.@directories[0].payloaddir=user/defcon'
   uci commit payloads
   echo 'registered user/defcon in the Payloads menu'
 fi
