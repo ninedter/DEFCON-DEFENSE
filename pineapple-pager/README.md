@@ -88,7 +88,7 @@ updates every second and the buzzer tick speeds up as you get closer to the
 problem. Press A to MARK SPOT where it peaks, then match the numbered marks in
 `/root/loot/rf_buddy/<date-time>/marks.csv` to places in the office. Set
 `OFFICE_SSID` in its `payload.sh` to also flag weak coverage; `TICK_FREQ_HZ` and
-`TICK_VOLUME` (0-255) set the tick's pitch and loudness. The Pager's radio
+`TICK_VOLUME` (0-100) set the tick's pitch and loudness. The Pager's radio
 cannot report busy time or noise floor, so RF-BUDDY scores channels from Wi-Fi
 airtime, retries, AP crowding, and Bluetooth density; the Bluetooth scan is
 passive.

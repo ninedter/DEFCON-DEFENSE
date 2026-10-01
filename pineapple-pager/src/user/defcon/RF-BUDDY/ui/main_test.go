@@ -38,7 +38,7 @@ func TestParseOptionsBuzzerDefaultsAndLegacyTickFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if o.buzzerDir != "/sys/class/leds/buzzer" || o.tickFreqHz != 2000 || o.tickVolume != 128 {
+	if o.buzzerDir != "/sys/class/leds/buzzer" || o.tickFreqHz != 2000 || o.tickVolume != 60 {
 		t.Fatalf("buzzer defaults = %+v", o)
 	}
 }

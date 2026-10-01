@@ -2,7 +2,7 @@
 # Title: RF-BUDDY
 # Description: Passive 2.4/5 GHz interference finder: live channel meter, lock-on tracking, and survey log.
 # Author: Henry Hu
-# Version: 1.0
+# Version: 1.1
 # Category: DEFCON
 #
 # Walk the office with this running. The overview ranks every channel; lock on
@@ -21,7 +21,7 @@ WEAK_SIGNAL_DBM=-70       # office AP quieter than this -> WEAK COVERAGE
 LOG_MAX_MB=20             # per-session log cap
 MIN_FREE_MB=64            # pause logging below this much free storage
 TICK_FREQ_HZ=2000         # buzzer pitch for the lock-on tick, Hz
-TICK_VOLUME=128           # buzzer loudness for the lock-on tick, 0-255
+TICK_VOLUME=60            # buzzer loudness for the lock-on tick, 0-100
 # ----------------------------------------------------------------------------
 
 # The Pager starts payloads without an exported PATH; child processes (the UI

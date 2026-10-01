@@ -114,7 +114,7 @@ was copied from DEFCON-DEFENSE's UI and shares no code or files with it.
 | `LOG_MAX_MB` | `20` | Per-session log cap. |
 | `MIN_FREE_MB` | `64` | Logging pauses below this free space. |
 | `TICK_FREQ_HZ` | `2000` | Buzzer pitch of the lock-on tick, Hz. |
-| `TICK_VOLUME` | `128` | Buzzer loudness of the lock-on tick, 0-255. |
+| `TICK_VOLUME` | `60` | Buzzer loudness of the lock-on tick, 0-100. |
 
 ## Measurement
 

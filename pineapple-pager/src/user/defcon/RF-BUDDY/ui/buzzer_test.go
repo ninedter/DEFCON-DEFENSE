@@ -30,7 +30,7 @@ func readTrim(t *testing.T, dir, name string) string {
 
 func TestBuzzerBeepAndRestore(t *testing.T) {
 	dir := fakeBuzzerDir(t)
-	b, err := OpenBuzzer(dir, 2000, 128)
+	b, err := OpenBuzzer(dir, 2000, 60)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -38,7 +38,7 @@ func TestBuzzerBeepAndRestore(t *testing.T) {
 	if got := readTrim(t, dir, "brightness"); got != "0" {
 		t.Fatalf("brightness after beep = %q", got)
 	}
-	if readTrim(t, dir, "frequency") != "2000" || readTrim(t, dir, "volume") != "128" {
+	if readTrim(t, dir, "frequency") != "2000" || readTrim(t, dir, "volume") != "60" {
 		t.Fatal("beep must set frequency and volume")
 	}
 	raw, _ := os.ReadFile(filepath.Join(dir, "frequency"))
@@ -57,12 +57,12 @@ func TestOpenBuzzerMissing(t *testing.T) {
 	}
 	dir := fakeBuzzerDir(t)
 	os.Remove(filepath.Join(dir, "brightness"))
-	if _, err := OpenBuzzer(dir, 2000, 128); err == nil {
+	if _, err := OpenBuzzer(dir, 2000, 60); err == nil {
 		t.Fatal("missing brightness must error")
 	}
 	dir = fakeBuzzerDir(t)
 	os.Remove(filepath.Join(dir, "max_brightness"))
-	if _, err := OpenBuzzer(dir, 2000, 128); err == nil {
+	if _, err := OpenBuzzer(dir, 2000, 60); err == nil {
 		t.Fatal("missing max_brightness must error")
 	}
 }
@@ -71,4 +71,19 @@ func TestBuzzerNilSafe(t *testing.T) {
 	var b *Buzzer
 	b.Beep(time.Millisecond)
 	b.Close()
+}
+
+func TestBuzzerVolumeClamped(t *testing.T) {
+	for in, want := range map[int]string{150: "100", -5: "0", 60: "60"} {
+		dir := fakeBuzzerDir(t)
+		b, err := OpenBuzzer(dir, 2000, in)
+		if err != nil {
+			t.Fatal(err)
+		}
+		b.Beep(time.Millisecond)
+		if got := readTrim(t, dir, "volume"); got != want {
+			t.Fatalf("volume %d wrote %q, want %q", in, got, want)
+		}
+		b.Close()
+	}
 }

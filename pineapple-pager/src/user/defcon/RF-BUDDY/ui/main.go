@@ -41,7 +41,7 @@ func parseOptions(args []string) (options, error) {
 	fs.StringVar(&o.tickFile, "tick-file", "", "deprecated no-op; the lock-on tick is now played by the buzzer ticker")
 	fs.StringVar(&o.buzzerDir, "buzzer-dir", "/sys/class/leds/buzzer", "buzzer sysfs directory")
 	fs.IntVar(&o.tickFreqHz, "tick-freq-hz", 2000, "lock-on tick tone frequency")
-	fs.IntVar(&o.tickVolume, "tick-volume", 128, "lock-on tick volume")
+	fs.IntVar(&o.tickVolume, "tick-volume", 60, "lock-on tick volume (0-100)")
 	fs.StringVar(&o.officeSSID, "office-ssid", "", "office SSID for WEAK COVERAGE")
 	fs.IntVar(&o.dwellMS, "dwell-ms", 250, "overview dwell per channel")
 	fs.IntVar(&o.logMaxMB, "log-max-mb", 20, "per-session log cap")

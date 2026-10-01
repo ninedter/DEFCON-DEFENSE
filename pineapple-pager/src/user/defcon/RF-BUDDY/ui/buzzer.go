@@ -27,6 +27,12 @@ func OpenBuzzer(dir string, freqHz, volume int) (*Buzzer, error) {
 		}
 		return strings.TrimSpace(string(b)), nil
 	}
+	// the driver clamps volume to 0-100
+	if volume < 0 {
+		volume = 0
+	} else if volume > 100 {
+		volume = 100
+	}
 	b := &Buzzer{dir: dir, freq: freqHz, vol: volume}
 	var err error
 	if _, err = read("brightness"); err != nil {

@@ -48,7 +48,7 @@ Files: `UI/main.go`, `UI/display.go`, new `UI/grab_linux.go`, `UI/grab_other.go`
 Edit `src/user/defcon/RF-BUDDY/payload.sh`, `tests/test_rf_buddy_payload.sh`.
 
 1. Near the top (after the CONFIG block): `export PATH="${PATH:-/usr/sbin:/usr/bin:/sbin:/bin}"` plus a comment that the Pager starts payloads without an exported PATH.
-2. CONFIG: remove `TICK_RINGTONE`; add `TICK_FREQ_HZ=2000` and `TICK_VOLUME=128` (comment: buzzer pitch and loudness for the lock-on tick, 0-255); pass `--tick-freq-hz` and `--tick-volume`; remove `--tick-file`.
+2. CONFIG: remove `TICK_RINGTONE`; add `TICK_FREQ_HZ=2000` and `TICK_VOLUME=60` (comment: buzzer pitch and loudness for the lock-on tick, 0-100); pass `--tick-freq-hz` and `--tick-volume`; remove `--tick-file`.
 3. Delete `install_virtual_pager_bridge`, `UI_BRIDGE_SOURCE`, `tick_once`, `tick_loop`, `TICK_FILE`, `TICK_PID`, and the `killall`/`hcitool` lines in cleanup (the Go binary stops its own hcitool with SIGINT and scan-disable).
 4. Stock UI freeze (own implementation, own names):
    - `stock_ui_freeze()`: `pids="$(pidof pineapple 2>/dev/null)"`; if empty return 0; `kill -STOP $pids` (on failure return 1); `FROZEN_PIDS="$pids"`.

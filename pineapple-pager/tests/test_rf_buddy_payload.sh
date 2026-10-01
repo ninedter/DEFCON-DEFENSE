@@ -132,7 +132,7 @@ export RF_BUDDY_BUZZER_DIR="$BUZ"
 
 : > "$REC"
 bash "$PAYLOAD"; assert_rc "$?" "0" "payload runs the UI and exits cleanly"
-for arg in --framebuffer /dev/fb0 --iface wlan1mon --office-ssid --loot-dir --retry-high-pct --airtime-high-pct --tick-freq-hz 2000 --tick-volume 128 LOCK_HELD; do
+for arg in --framebuffer /dev/fb0 --iface wlan1mon --office-ssid --loot-dir --retry-high-pct --airtime-high-pct --tick-freq-hz 2000 --tick-volume 60 LOCK_HELD; do
   grep -qx -- "$arg" "$FAKE_UI_ARGS"; assert_rc "$?" "0" "UI launched with $arg"
 done
 if grep -qx -- '--tick-file' "$FAKE_UI_ARGS"; then x=1; else x=0; fi

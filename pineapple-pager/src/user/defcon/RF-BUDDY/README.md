@@ -57,7 +57,7 @@ Edit the CONFIG block at the top of `payload.sh`:
 
 - `OFFICE_SSID` — your office network name. Enables `WEAK COVERAGE`.
 - `TICK_FREQ_HZ` — pitch of the lock-on tick on the Pager buzzer (default 2000).
-- `TICK_VOLUME` — loudness of the tick, 0-255 (default 128).
+- `TICK_VOLUME` — loudness of the tick, 0-100 (default 60).
 - Thresholds (`RETRY_HIGH_PCT`, `AIRTIME_HIGH_PCT`, …) are documented inline.
 
 Recon keeps running while RF-BUDDY is open; it is locked to one channel at a
