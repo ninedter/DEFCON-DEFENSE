@@ -8,7 +8,7 @@ a repeated same-offense**, stay quiet on ambient DEF CON noise.
 
 | Payload | Type | Warns you when… |
 |---|---|---|
-| `user/general/DEFCON_DEFENSE` | on-demand | runs a dedicated 480x222 full-screen Pager application with the designed general, threat-detail, and PCAP-evidence interfaces; it supplies live passive 2.4/5 GHz Recon, background trusted/watched-network correlation, bounded investigation capture, evidence verification, and later download through Virtual Pager |
+| `user/defcon/DEFCON-DEFENSE` | on-demand | runs a dedicated 480x222 full-screen Pager application with the designed general, threat-detail, and PCAP-evidence interfaces; it supplies live passive 2.4/5 GHz Recon, background trusted/watched-network correlation, bounded investigation capture, evidence verification, and later download through Virtual Pager |
 | `alerts/deauth_flood_detected/defcon_sentry` | auto (custom) | the **same** attacker sustains a deauth/disassoc flood (3 hits/2 min, 5 min cooldown; watched MACs escalate instantly), then immediately starts a bounded passive PCAP when storage and concurrency guards allow |
 | `alerts/pineapple_client_connected/defcon_honeypot` | auto (custom) | a client joins **your decoy AP** (first sighting per client, dedup reconnects; flags randomized/private MACs — most modern phones use these, so it's expected, not alarming) |
 | `user/general/PORT_ALERT` | on-demand | someone port-scans the Pager (auto-hardens firewall 60s) |
@@ -46,7 +46,7 @@ PMKID attacks, handshake capture/crack, captive portals, PineAP karma/rogue-AP.
 
 - **Always-on (no action needed once armed):** `defcon_sentry`, `defcon_honeypot`
   — they fire from the engine while you do anything else.
-- **Unified RF monitoring:** open `DEFCON_DEFENSE`. The custom application
+- **Unified RF monitoring:** open `DEFCON-DEFENSE`. The custom application
   renders directly on the physical 480x222 display and mirrors the same canvas
   in Virtual Pager. The three primary views are the designed **general**,
   **threat detail**, and **evidence browser** screens. On the general screen,
@@ -76,7 +76,7 @@ Each custom handler has a CONFIG block at the top of its `payload.sh`:
   `KEY_MODE`, `WATCH_MACS` (put **your** device MACs here for instant targeted
   warnings).
 - `defcon_honeypot`: `COOLDOWN_SECONDS` (default `600`).
-- `DEFCON_DEFENSE`: `MONITOR_INTERVAL`, `NEW_BSSID_THRESHOLD`,
+- `DEFCON-DEFENSE`: `MONITOR_INTERVAL`, `NEW_BSSID_THRESHOLD`,
   `OBSERVATION_WINDOW`, `ALERT_COOLDOWN`, and `MIN_NEW_BSSID_SIGNAL`. Authorized
   SSID/BSSID/channel mappings live in its non-secret `trusted_aps.conf` file.
 

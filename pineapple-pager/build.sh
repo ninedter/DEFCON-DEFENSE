@@ -14,7 +14,7 @@ PCAP_LIB="$HERE/lib/pcap_evidence_lib.sh"
 rm -rf "$OUT"
 mkdir -p "$OUT/alerts/deauth_flood_detected" \
          "$OUT/alerts/pineapple_client_connected" \
-         "$OUT/user/general" "$OUT/user/reconnaissance"
+         "$OUT/user/general" "$OUT/user/reconnaissance" "$OUT/user/defcon"
 
 # Custom handlers + shared lib injected beside each payload.sh
 cp -R "$HERE/src/deauth_flood_detected/defcon_sentry"           "$OUT/alerts/deauth_flood_detected/"
@@ -24,14 +24,14 @@ cp "$LIB" "$OUT/alerts/pineapple_client_connected/defcon_honeypot/pager_alert_li
 cp "$PCAP_LIB" "$OUT/alerts/deauth_flood_detected/defcon_sentry/pcap_evidence_lib.sh"
 
 # Visible on-device entry point for status and launching the curated tools.
-cp -R "$HERE/src/user/general/DEFCON_DEFENSE" "$OUT/user/general/"
-cp "$PCAP_LIB" "$OUT/user/general/DEFCON_DEFENSE/pcap_evidence_lib.sh"
+cp -R "$HERE/src/user/defcon/DEFCON-DEFENSE" "$OUT/user/defcon/"
+cp "$PCAP_LIB" "$OUT/user/defcon/DEFCON-DEFENSE/pcap_evidence_lib.sh"
 
 # Compile the full-screen 480x222 Pager application for the device's MIPS32
 # soft-float userspace. Only the binary is shipped to the Pager.
-bash "$HERE/src/user/general/DEFCON_DEFENSE/ui/build.sh" \
-  "$OUT/user/general/DEFCON_DEFENSE/defcon-ui"
-rm -rf "$OUT/user/general/DEFCON_DEFENSE/ui"
+bash "$HERE/src/user/defcon/DEFCON-DEFENSE/ui/build.sh" \
+  "$OUT/user/defcon/DEFCON-DEFENSE/defcon-ui"
+rm -rf "$OUT/user/defcon/DEFCON-DEFENSE/ui"
 
 # Curated stock detectors (whole directories, verbatim).
 # Required core must exist; optional ones are best-effort — the community
@@ -51,7 +51,7 @@ done
 
 # Deterministic 644 regardless of the builder's umask (device payload convention).
 find "$OUT" -type f -exec chmod 644 {} +
-chmod 755 "$OUT/user/general/DEFCON_DEFENSE/defcon-ui"
+chmod 755 "$OUT/user/defcon/DEFCON-DEFENSE/defcon-ui"
 
 # Syntax-check the whole output
 err=0
