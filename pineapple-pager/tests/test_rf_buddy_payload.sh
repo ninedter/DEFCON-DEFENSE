@@ -18,7 +18,18 @@ VIBRATE()      { printf 'VIBRATE\t%s\n' "$*" >> "$REC"; }
 killall()      { printf 'KILLALL\t%s\n' "$*" >> "$REC"; }
 hcitool()      { printf 'HCITOOL\t%s\n' "$*" >> "$REC"; }
 _pineap()      { printf 'PINEAP\t%s\n' "$*" >> "$REC"; }
-export -f LOG ERROR_DIALOG RINGTONE VIBRATE killall hcitool _pineap
+# Fake stock UI: pidof reports a fake pid when FAKE_PINEAPPLE_PID is set; kill
+# records every call and never signals the fake pid (real pids pass through).
+pidof() { [ -n "${FAKE_PINEAPPLE_PID:-}" ] && [ "${1:-}" = "pineapple" ] && { echo "$FAKE_PINEAPPLE_PID"; return 0; }; return 1; }
+kill() {
+  printf 'KILL\t%s\n' "$*" >> "$REC"
+  local a
+  for a in "$@"; do
+    [ -n "${FAKE_PINEAPPLE_PID:-}" ] && [ "$a" = "$FAKE_PINEAPPLE_PID" ] && return 0
+  done
+  builtin kill "$@"
+}
+export -f LOG ERROR_DIALOG RINGTONE VIBRATE killall hcitool _pineap pidof kill
 export REC
 
 export RF_BUDDY_INSTALL_DIR="$ROOT/src/user/defcon/RF-BUDDY"
@@ -48,20 +59,49 @@ release_channel
 assert_eq "$(tr '\t' ' ' < "$REC")" "PINEAP EXAMINE CANCEL" "channel lock is handed back to Recon"
 
 : > "$REC"
-RINGTONE_RC=1 tick_once
-assert_eq "$(cut -f1 "$REC" | paste -sd'|' -)" "RINGTONE|VIBRATE" "tick falls back to a vibration when the ringtone fails"
-grep -q $'^VIBRATE\ttick:d=32,o=6,b=200:c$' "$REC"; assert_rc "$?" "0" "vibration fallback uses the RTTTL pattern"
-
-: > "$REC"
 rf_lock_acquire
-echo 1150 > "$TICK_FILE"
+FROZEN_PIDS=""
 rf_buddy_cleanup
 rf_buddy_cleanup
 [ ! -d "$RF_BUDDY_LOCK_DIR" ]; assert_rc "$?" "0" "cleanup releases the lock"
-[ ! -f "$TICK_FILE" ]; assert_rc "$?" "0" "cleanup removes the tick file"
 assert_eq "$(grep -c 'EXAMINE CANCEL' "$REC")" "1" "cleanup releases the channel exactly once"
-assert_eq "$(grep -c $'^KILLALL\t-INT hcitool$' "$REC")" "1" "cleanup interrupts the BLE scan"
-assert_eq "$(grep -c $'^HCITOOL\t-i hci0 cmd 0x08 0x000c 00 00$' "$REC")" "1" "cleanup disables LE scanning"
+if grep -Eq '^(KILLALL|HCITOOL|RINGTONE|VIBRATE)' "$REC"; then x=1; else x=0; fi
+assert_rc "$x" "0" "cleanup runs no killall/hcitool/ringtone (the binary stops its own scan)"
+
+# stock UI freeze/resume
+export FAKE_PINEAPPLE_PID=4242
+: > "$REC"
+stock_ui_freeze; assert_rc "$?" "0" "freeze succeeds"
+assert_eq "$FROZEN_PIDS" "4242" "freeze remembers the frozen pids"
+assert_eq "$(grep -c $'^KILL\t-STOP 4242$' "$REC")" "1" "freeze sends SIGSTOP"
+stock_ui_resume
+stock_ui_resume
+assert_eq "$FROZEN_PIDS" "" "resume clears the frozen pids"
+assert_eq "$(grep -c $'^KILL\t-CONT 4242$' "$REC")" "1" "resume sends SIGCONT exactly once (idempotent)"
+unset FAKE_PINEAPPLE_PID
+: > "$REC"
+stock_ui_freeze; assert_rc "$?" "0" "freeze is a no-op when no stock UI runs"
+assert_eq "$(grep -c STOP "$REC")" "0" "no SIGSTOP without a stock UI"
+FAKE_INITD="$TMP/fake-initd"
+printf '#!/bin/sh\necho "$1" >> "%s/initd.log"\n' "$TMP" > "$FAKE_INITD"; chmod +x "$FAKE_INITD"
+RF_BUDDY_PINEAPPLE_INITD="$FAKE_INITD" stock_ui_resume
+assert_eq "$(cat "$TMP/initd.log" 2>/dev/null)" "start" "resume starts the stock UI via init.d when it is gone"
+export FAKE_PINEAPPLE_PID=4242
+rm -f "$TMP/initd.log"
+RF_BUDDY_PINEAPPLE_INITD="$FAKE_INITD" stock_ui_resume
+[ ! -f "$TMP/initd.log" ]; assert_rc "$?" "0" "resume does not start a second stock UI"
+unset FAKE_PINEAPPLE_PID
+
+# cleanup resumes a frozen UI before handing the channel back
+export FAKE_PINEAPPLE_PID=4242
+: > "$REC"; CLEANED=0
+rf_lock_acquire
+FROZEN_PIDS=4242
+rf_buddy_cleanup
+cont_line="$(grep -n $'^KILL\t-CONT 4242$' "$REC" | head -1 | cut -d: -f1)"
+cancel_line="$(grep -n 'EXAMINE CANCEL' "$REC" | head -1 | cut -d: -f1)"
+[ -n "$cont_line" ] && [ -n "$cancel_line" ] && [ "$cont_line" -lt "$cancel_line" ]; assert_rc "$?" "0" "cleanup resumes the stock UI before releasing the channel"
+unset FAKE_PINEAPPLE_PID
 
 # --- full run with a fake UI binary ----------------------------------------
 FAKE_UI="$TMP/fake-ui"
@@ -69,20 +109,54 @@ cat > "$FAKE_UI" <<'EOF'
 #!/bin/bash
 printf '%s\n' "$@" > "$FAKE_UI_ARGS"
 [ -d "$RF_BUDDY_LOCK_DIR" ] && echo LOCK_HELD >> "$FAKE_UI_ARGS"
+# PATH_EXPORTED=1 only when the parent really exported PATH to us.
+case "$(declare -p PATH 2>/dev/null)" in "declare -x"*) echo PATH_EXPORTED=1 >> "$FAKE_UI_ARGS" ;; esac
+echo "PATH=$PATH" >> "$FAKE_UI_ARGS"
+ready=""
+while [ $# -gt 0 ]; do [ "$1" = "--ready-file" ] && ready="$2"; shift; done
+[ -n "$ready" ] && echo ready > "$ready"
+printf 'UIREADY\t-\n' >> "$REC"
+sleep 0.4
 exit 0
 EOF
 chmod +x "$FAKE_UI"
 export RF_BUDDY_UI_BINARY="$FAKE_UI" FAKE_UI_ARGS="$TMP/ui-args"
+export FAKE_PINEAPPLE_PID=4242
+BUZ="$TMP/buzzer"; mkdir -p "$BUZ"; echo 255 > "$BUZ/brightness"
+export RF_BUDDY_BUZZER_DIR="$BUZ"
 
 : > "$REC"
 bash "$PAYLOAD"; assert_rc "$?" "0" "payload runs the UI and exits cleanly"
-for arg in --framebuffer /dev/fb0 --iface wlan1mon --office-ssid --tick-file --loot-dir --retry-high-pct --airtime-high-pct LOCK_HELD; do
+for arg in --framebuffer /dev/fb0 --iface wlan1mon --office-ssid --loot-dir --retry-high-pct --airtime-high-pct --tick-freq-hz 2000 --tick-volume 128 LOCK_HELD; do
   grep -qx -- "$arg" "$FAKE_UI_ARGS"; assert_rc "$?" "0" "UI launched with $arg"
 done
+if grep -qx -- '--tick-file' "$FAKE_UI_ARGS"; then x=1; else x=0; fi
+assert_rc "$x" "0" "UI is not passed the removed --tick-file"
 [ ! -d "$RF_BUDDY_LOCK_DIR" ]; assert_rc "$?" "0" "lock is released after a normal exit"
 grep -q 'EXAMINE CANCEL' "$REC"; assert_rc "$?" "0" "channel lock is released after the run"
 if grep -q 'RECON STOP' "$REC"; then recon_rc=1; else recon_rc=0; fi
 assert_rc "$recon_rc" "0" "Recon itself is never stopped"
+assert_eq "$(cat "$BUZ/brightness")" "0" "cleanup forces the buzzer off"
+
+ready_l="$(grep -n '^UIREADY' "$REC" | head -1 | cut -d: -f1)"
+stop_l="$(grep -n $'^KILL\t-STOP 4242$' "$REC" | head -1 | cut -d: -f1)"
+cont_l="$(grep -n $'^KILL\t-CONT 4242$' "$REC" | head -1 | cut -d: -f1)"
+cancel_l="$(grep -n 'EXAMINE CANCEL' "$REC" | head -1 | cut -d: -f1)"
+[ -n "$ready_l" ] && [ -n "$stop_l" ] && [ "$ready_l" -lt "$stop_l" ]; assert_rc "$?" "0" "stock UI is frozen only after the UI is ready"
+[ -n "$stop_l" ] && [ -n "$cont_l" ] && [ "$stop_l" -lt "$cont_l" ]; assert_rc "$?" "0" "stock UI is resumed after it was frozen"
+[ -n "$cont_l" ] && [ -n "$cancel_l" ] && [ "$cont_l" -lt "$cancel_l" ]; assert_rc "$?" "0" "stock UI is resumed before the channel is released"
+between="$(sed -n "${stop_l:-1},${cont_l:-1}p" "$REC" | grep -Ec '^(LOG|ERROR|RINGTONE|VIBRATE)')"
+assert_eq "$between" "0" "no hak5 API call between SIGSTOP and SIGCONT"
+log_l="$(grep -n '^LOG' "$REC" | head -1 | cut -d: -f1)"
+[ -n "$log_l" ] && [ -n "$stop_l" ] && [ "$log_l" -lt "$stop_l" ]; assert_rc "$?" "0" "the startup LOG happens before the freeze"
+unset FAKE_PINEAPPLE_PID
+
+# Parent shell without an exported PATH (as the Pager runner starts payloads).
+: > "$REC"; rm -f "$FAKE_UI_ARGS"
+BASH_BIN="$(command -v bash)"
+env -u PATH "$BASH_BIN" "$PAYLOAD"; assert_rc "$?" "0" "payload runs with PATH removed from the environment"
+grep -qx 'PATH_EXPORTED=1' "$FAKE_UI_ARGS"; assert_rc "$?" "0" "UI inherits an exported PATH even when the runner had none"
+grep -Eq '^PATH=.+' "$FAKE_UI_ARGS"; assert_rc "$?" "0" "UI sees a non-empty PATH"
 
 : > "$REC"; rm -f "$FAKE_UI_ARGS"
 mkdir -p "$RF_BUDDY_LOCK_DIR"; echo "$$" > "$RF_BUDDY_LOCK_DIR/pid"
@@ -96,5 +170,8 @@ rm -rf "$RF_BUDDY_LOCK_DIR"
 
 if rg -n 'PINEAPPLE_DEAUTH|aireplay|mdk[34]|txpower|RECON STOP|HOPPING_STOP' "$PAYLOAD" >/dev/null 2>&1; then passive_rc=1; else passive_rc=0; fi
 assert_rc "$passive_rc" "0" "payload never transmits or stops Recon"
+
+if grep -Eq 'pineapple/ui|bridge|killall|1472|RINGTONE|TICK_FILE|tick_loop' "$PAYLOAD"; then shared_rc=1; else shared_rc=0; fi
+assert_rc "$shared_rc" "0" "payload touches no shared UI, bridge, port 1472, ringtone or killall"
 
 exit "$FAIL"

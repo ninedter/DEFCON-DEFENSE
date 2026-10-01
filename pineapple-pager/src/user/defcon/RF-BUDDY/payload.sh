@@ -20,8 +20,13 @@ BT_DENSE_COUNT=30         # nearby BLE devices for BT DENSE
 WEAK_SIGNAL_DBM=-70       # office AP quieter than this -> WEAK COVERAGE
 LOG_MAX_MB=20             # per-session log cap
 MIN_FREE_MB=64            # pause logging below this much free storage
-TICK_RINGTONE="tick:d=32,o=6,b=200:c"  # lock-on tick, inline RTTTL (any ringtone name or RTTTL works)
+TICK_FREQ_HZ=2000         # buzzer pitch for the lock-on tick, Hz
+TICK_VOLUME=128           # buzzer loudness for the lock-on tick, 0-255
 # ----------------------------------------------------------------------------
+
+# The Pager starts payloads without an exported PATH; child processes (the UI
+# binary and the tools it runs) need one.
+export PATH="${PATH:-/usr/sbin:/usr/bin:/sbin:/bin}"
 
 PAYLOAD_ROOT="/root/payloads"
 # The Pager payload runner may execute payload.sh from a temporary directory,
@@ -37,17 +42,16 @@ else
   DIR="$SOURCE_DIR"
 fi
 UI_BINARY="${RF_BUDDY_UI_BINARY:-$DIR/rf-buddy-ui}"
-UI_BRIDGE_SOURCE="$DIR/virtual-pager-bridge.js"
 LOOT_ROOT="${RF_BUDDY_LOOT_DIR:-/root/loot/rf_buddy}"
 RUN_DIR="${RF_BUDDY_RUN_DIR:-/tmp/rf_buddy}"
 LOCK_DIR="${RF_BUDDY_LOCK_DIR:-/tmp/rf_buddy.lock}"
 MON_IFACE="wlan1mon"
 BT_IFACE="hci0"
-TICK_FILE="$RUN_DIR/tick_ms"
+BUZZER_DIR="${RF_BUDDY_BUZZER_DIR:-/sys/class/leds/buzzer}"
 READY_FILE="$RUN_DIR/ready"
 
 UI_PID=""
-TICK_PID=""
+FROZEN_PIDS=""
 LOCKED=0
 CLEANED=0
 
@@ -83,70 +87,58 @@ release_channel() {
   _pineap EXAMINE CANCEL >/dev/null 2>&1 || true
 }
 
-tick_once() {
-  RINGTONE "$TICK_RINGTONE" >/dev/null 2>&1 || VIBRATE "$TICK_RINGTONE" >/dev/null 2>&1 || true
+# Freeze the stock Pager UI so it stops drawing over our framebuffer and
+# reading the buttons. No hak5 API command works while it is frozen, so
+# nothing may call hak5 API commands between freeze and resume.
+stock_ui_freeze() {
+  local pids
+  pids="$(pidof pineapple 2>/dev/null)"
+  [ -n "$pids" ] || return 0
+  # shellcheck disable=SC2086
+  kill -STOP $pids 2>/dev/null || return 1
+  FROZEN_PIDS="$pids"
 }
 
-# The UI writes the lock-on tick interval in ms (0 = off) to $TICK_FILE.
-tick_loop() {
-  local ms secs
-  while :; do
-    ms="$(cat "$TICK_FILE" 2>/dev/null)"
-    case "$ms" in ''|*[!0-9]*) ms=0 ;; esac
-    if [ "$ms" -gt 0 ]; then
-      tick_once
-      secs="$((ms / 1000)).$(printf '%03d' $((ms % 1000)))"
-      sleep "$secs"
-    else
-      sleep 0.25
-    fi
-  done
-}
-
-# Same idempotent Virtual Pager bridge DEFCON-DEFENSE installs; it mirrors
-# whichever full-screen app is serving on port 1472.
-install_virtual_pager_bridge() {
-  local ui_root="/pineapple/ui"
-  local index="$ui_root/index.html"
-  local target="$ui_root/defcon-ui-bridge.js"
-  local inline="$ui_root/defcon-ui-bridge.inline"
-  local tmp="$ui_root/index.html.defcon-defense.tmp"
-  [ -f "$UI_BRIDGE_SOURCE" ] && [ -f "$index" ] || return 1
-  cp "$UI_BRIDGE_SOURCE" "$target" || return 1
-  if grep -Fq '__defconDefenseBridgeVersion = "4.3.1"' "$index"; then
-    return 0
+# Idempotent: continue what we froze, and restart the stock UI if it is gone.
+stock_ui_resume() {
+  if [ -n "$FROZEN_PIDS" ]; then
+    # shellcheck disable=SC2086
+    kill -CONT $FROZEN_PIDS 2>/dev/null || true
+    FROZEN_PIDS=""
   fi
-  [ -f "$ui_root/index.html.defcon-defense-backup" ] || \
-    cp "$index" "$ui_root/index.html.defcon-defense-backup" || return 1
-  {
-    printf '<script>\n'
-    cat "$UI_BRIDGE_SOURCE"
-    printf '\n</script>\n</body>\n'
-  } > "$inline" || return 1
-  sed "/<\\/body>/{
-r $inline
-d
-}" "$ui_root/index.html.defcon-defense-backup" > "$tmp" || return 1
-  mv -f "$tmp" "$index"
+  local initd="${RF_BUDDY_PINEAPPLE_INITD:-/etc/init.d/pineapplepager}"
+  if [ -z "$(pidof pineapple 2>/dev/null)" ] && [ -x "$initd" ]; then
+    "$initd" start >/dev/null 2>&1 || true
+  fi
+}
+
+# Stop our UI: TERM, then KILL after 3 s.
+stop_ui() {
+  local i=0
+  [ -n "$UI_PID" ] || return 0
+  if kill -0 "$UI_PID" 2>/dev/null; then
+    kill "$UI_PID" 2>/dev/null || true
+    while kill -0 "$UI_PID" 2>/dev/null && [ "$i" -lt 60 ]; do
+      sleep 0.05
+      i=$((i + 1))
+    done
+    kill -0 "$UI_PID" 2>/dev/null && kill -KILL "$UI_PID" 2>/dev/null
+  fi
+  wait "$UI_PID" 2>/dev/null || true
+  UI_PID=""
+  return 0
 }
 
 rf_buddy_cleanup() {
   [ "$CLEANED" = "1" ] && return 0
   CLEANED=1
-  if [ -n "$TICK_PID" ] && kill -0 "$TICK_PID" 2>/dev/null; then
-    kill "$TICK_PID" 2>/dev/null || true
-    wait "$TICK_PID" 2>/dev/null || true
-  fi
-  TICK_PID=""
-  if [ -n "$UI_PID" ] && kill -0 "$UI_PID" 2>/dev/null; then
-    kill "$UI_PID" 2>/dev/null || true
-    wait "$UI_PID" 2>/dev/null || true
-  fi
-  UI_PID=""
-  killall -INT hcitool >/dev/null 2>&1 || true
-  hcitool -i "$BT_IFACE" cmd 0x08 0x000c 00 00 >/dev/null 2>&1 || true
-  rm -f "$TICK_FILE" "$TICK_FILE.tmp" "$READY_FILE"
+  stop_ui
+  # Hand the stock UI back first; nothing below needs the UI to stay frozen.
+  stock_ui_resume
+  # Backstop: a SIGKILLed UI must never leave the buzzer sounding.
+  [ -w "$BUZZER_DIR/brightness" ] && echo 0 > "$BUZZER_DIR/brightness" 2>/dev/null || true
   release_channel
+  rm -f "$READY_FILE"
   rf_lock_release
 }
 
@@ -167,10 +159,7 @@ rf_buddy_main() {
   trap 'rf_buddy_cleanup; exit 129' HUP
 
   LOG "RF-BUDDY: Recon stays on; locked to one channel at a time."
-  install_virtual_pager_bridge >/dev/null 2>&1 || true
-  echo 0 > "$TICK_FILE"
-  tick_loop &
-  TICK_PID=$!
+  rm -f "$READY_FILE"
 
   "$UI_BINARY" \
     --framebuffer /dev/fb0 \
@@ -179,7 +168,8 @@ rf_buddy_main() {
     --iface "$MON_IFACE" \
     --bt-iface "$BT_IFACE" \
     --loot-dir "$LOOT_ROOT" \
-    --tick-file "$TICK_FILE" \
+    --tick-freq-hz "$TICK_FREQ_HZ" \
+    --tick-volume "$TICK_VOLUME" \
     --office-ssid "$OFFICE_SSID" \
     --dwell-ms "$DWELL_MS" \
     --log-max-mb "$LOG_MAX_MB" \
@@ -190,6 +180,14 @@ rf_buddy_main() {
     --bt-dense-count "$BT_DENSE_COUNT" \
     --weak-signal-dbm "$WEAK_SIGNAL_DBM" &
   UI_PID=$!
+  # LOG above was the last hak5 API call. Wait for the UI's first frame, then
+  # freeze the stock UI; it is resumed in cleanup.
+  local i=0
+  while [ ! -f "$READY_FILE" ] && kill -0 "$UI_PID" 2>/dev/null && [ "$i" -lt 100 ]; do
+    sleep 0.05
+    i=$((i + 1))
+  done
+  [ -f "$READY_FILE" ] && { stock_ui_freeze || true; }
   wait "$UI_PID"
   rc=$?
   UI_PID=""
