@@ -320,15 +320,51 @@ func TestPanelTextDoesNotOverwriteBorders(t *testing.T) {
 
 	a.screen = screenThreat
 	threat := a.render(state)
-	for _, x := range []int{4, 136, 225, 350, 475} {
+	for _, x := range []int{4, threatFooterSplitX, 225, 350, 475} {
 		assertVerticalColor(t, threat, x, 173, 202, white)
 	}
 
 	a.screen = screenEvidence
 	evidence := a.render(state)
-	for _, x := range []int{4, 86, 163, 241, 323, 402, 475} {
+	for _, x := range []int{4, evidenceFooterSplitX, 163, 241, 323, 402, 475} {
 		assertVerticalColor(t, evidence, x, 190, 219, cyan2)
 	}
+}
+
+func TestFooterHintsMatchPhysicalButtonSides(t *testing.T) {
+	a := &app{renderer: newRenderer("")}
+	state := previewState()
+	for _, tc := range []struct {
+		name   string
+		screen screenKind
+		y1, y2 int
+	}{
+		{"general", screenGeneral, 190, 222},
+		{"threat", screenThreat, 174, 202},
+		{"evidence", screenEvidence, 191, 219},
+		{"evidence detail", screenEvidenceDetail, 184, 222},
+	} {
+		a.screen = tc.screen
+		img := a.render(state)
+		bX, aX := firstColumnWith(img, red, tc.y1, tc.y2), firstColumnWith(img, green, tc.y1, tc.y2)
+		if bX < 0 || aX < 0 {
+			t.Fatalf("%s footer missing hint keys: B x=%d, A x=%d", tc.name, bX, aX)
+		}
+		if bX >= aX {
+			t.Fatalf("%s footer draws B at x=%d, not left of A at x=%d", tc.name, bX, aX)
+		}
+	}
+}
+
+func firstColumnWith(img *image.RGBA, want color.RGBA, y1, y2 int) int {
+	for x := 0; x < screenWidth; x++ {
+		for y := y1; y < y2; y++ {
+			if img.RGBAAt(x, y) == want {
+				return x
+			}
+		}
+	}
+	return -1
 }
 
 func assertVerticalColor(t *testing.T, img *image.RGBA, x, y1, y2 int, want color.RGBA) {
