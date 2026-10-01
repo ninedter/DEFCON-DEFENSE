@@ -156,4 +156,17 @@ printf '%s' "$out" | grep -q 'pruned old backup'; assert_rc "$?" "0" "pruning is
 PAGER_BACKUP_KEEP=x PAGER_LIBRARY="$LIB" PAGER_SSH="$FAKE_SSH" bash "$ROOT/deploy.sh" --skip-build --dry-run >/dev/null 2>&1
 assert_rc "$?" "2" "non-numeric PAGER_BACKUP_KEEP is rejected"
 
+PAGER_BACKUP_KEEP=0 PAGER_LIBRARY="$LIB" PAGER_SSH="$FAKE_SSH" bash "$ROOT/deploy.sh" --skip-build --dry-run >/dev/null 2>&1
+assert_rc "$?" "2" "PAGER_BACKUP_KEEP=0 is rejected"
+
+# --- a clock behind an existing backup must not prune the backup just made --
+BR3="$TMP/backups3"
+mkdir -p "$BR3/29991231-235959/RF-BUDDY"; echo future > "$BR3/29991231-235959/RF-BUDDY/payload.sh"
+FAKE_SSH_EXEC=1 PATH="$STUBS:$PATH" PAGER_PAYLOAD_ROOT="$PR" PAGER_BACKUP_ROOT="$BR3" \
+  PAGER_LIBRARY="$LIB" PAGER_SSH="$FAKE_SSH" bash "$ROOT/deploy.sh" --skip-build >/dev/null
+assert_rc "$?" "0" "deploy with a newer-named backup succeeds"
+[ -n "$(find "$BR3" -mindepth 2 -maxdepth 2 -name RF-BUDDY ! -path "$BR3/2999*")" ]
+assert_rc "$?" "0" "the backup just made is kept even when older-named"
+[ ! -e "$BR3/29991231-235959/RF-BUDDY" ]; assert_rc "$?" "0" "the other timestamp backup is pruned to make room"
+
 exit "$FAIL"

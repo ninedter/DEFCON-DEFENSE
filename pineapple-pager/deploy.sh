@@ -8,6 +8,7 @@
 #   ./deploy.sh --payload all             deploy both, one after the other
 #   ./deploy.sh --dry-run                 show what would run on the Pager
 #   ./deploy.sh --skip-build              deploy the existing library/
+#   PAGER_BACKUP_KEEP=N (default 1, must be >= 1): deploy backups kept per payload
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 PAGER_HOST="${PAGER_HOST:-root@172.16.52.1}"
@@ -17,6 +18,7 @@ BACKUP_ROOT="${PAGER_BACKUP_ROOT:-/mmc/root/payload-backups}"
 SSH="${PAGER_SSH:-ssh}"
 KEEP="${PAGER_BACKUP_KEEP:-1}"
 case "$KEEP" in ''|*[!0-9]*) echo "ERROR: PAGER_BACKUP_KEEP must be a number" >&2; exit 2 ;; esac
+[ "$KEEP" -ge 1 ] || { echo "ERROR: PAGER_BACKUP_KEEP must be at least 1" >&2; exit 2; }
 DRY_RUN=0
 SKIP_BUILD=0
 PAYLOAD="RF-BUDDY"
@@ -28,7 +30,7 @@ while [ $# -gt 0 ]; do
     --payload)
       [ $# -ge 2 ] || { echo "ERROR: --payload needs a name" >&2; exit 2; }
       PAYLOAD="$2"; shift ;;
-    -h|--help) sed -n '2,10p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,11p' "$0"; exit 0 ;;
     *) echo "ERROR: unknown option $1" >&2; exit 2 ;;
   esac
   shift
@@ -70,29 +72,35 @@ fi"
   fi
 
   # Runs on the Pager. Extracts the payload to a staging folder, moves any
-  # previous copy into a timestamped backup (never deleting it), swaps the new
-  # one in, and registers the menu category. Touches no other payload.
+  # previous copy into a timestamped backup, swaps the new one in, prunes older
+  # backups (never the one just made), and registers the menu category. Touches no other payload.
   REMOTE_SCRIPT="set -e
 mkdir -p '$REMOTE_ROOT/user/defcon'
 cd '$REMOTE_ROOT/user/defcon'
 TS=\$(date +%Y%m%d-%H%M%S)
 BK='$BACKUP_ROOT'/\$TS
+MADE=0
 rm -rf $NAME.new && mkdir $NAME.new
 tar -C $NAME.new -xf -
 if [ -d $NAME ]; then
   mkdir -p \"\$BK\"; mv $NAME \"\$BK/$NAME\"
   echo \"backup: \$BK/$NAME\"
+  MADE=1
 fi
 mv $NAME.new $NAME
 chmod 755 $NAME/$BIN
 $LEGACY
-# Keep only the newest $KEEP deploy backups of this payload. Only folders this
-# script creates (YYYYMMDD-HHMMSS) are considered, and only their $NAME entry.
+# Keep only the newest $KEEP deploy backups of this payload, counting the one
+# just made (never pruned, whatever the clock says). Only folders this script
+# creates (YYYYMMDD-HHMMSS) are considered, and only their $NAME entry.
 n=0
+LIMIT=$KEEP
+if [ \"\$MADE\" = 1 ]; then LIMIT=\$((LIMIT - 1)); fi
 for d in \$(ls -1d '$BACKUP_ROOT'/[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-[0-9][0-9][0-9][0-9][0-9][0-9] 2>/dev/null | sort -r); do
+  [ \"\$d\" = \"\$BK\" ] && continue
   [ -d \"\$d/$NAME\" ] || continue
   n=\$((n + 1))
-  if [ \"\$n\" -gt $KEEP ]; then
+  if [ \"\$n\" -gt \"\$LIMIT\" ]; then
     rm -rf \"\$d/$NAME\"
     rmdir \"\$d\" 2>/dev/null || true
     echo \"pruned old backup: \$d/$NAME\"
