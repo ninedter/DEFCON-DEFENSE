@@ -158,6 +158,15 @@ assert_eq "$(grep -c $'^KILL\t-CONT ' "$REC")" "1" "watchdog is gone: still exac
 assert_eq "$(grep -c 'EXAMINE CANCEL' "$REC")" "1" "watchdog does not release the channel a second time"
 log_l="$(grep -n '^LOG' "$REC" | head -1 | cut -d: -f1)"
 [ -n "$log_l" ] && [ -n "$stop_l" ] && [ "$log_l" -lt "$stop_l" ]; assert_rc "$?" "0" "the startup LOG happens before the freeze"
+
+# clean-exit marker is kept after normal cleanup
+[ -e "$RF_BUDDY_RUN_DIR/clean-exit" ]; assert_rc "$?" "0" "clean-exit marker is kept after normal cleanup"
+
+# second normal run: clean-exit marker is handled correctly
+: > "$REC"; rm -f "$FAKE_UI_ARGS"
+bash "$PAYLOAD"; assert_rc "$?" "0" "second normal run completes cleanly"
+[ -e "$RF_BUDDY_RUN_DIR/clean-exit" ]; assert_rc "$?" "0" "clean-exit marker is kept after second normal cleanup"
+[ ! -d "$RF_BUDDY_LOCK_DIR" ]; assert_rc "$?" "0" "lock is released after second normal exit"
 unset FAKE_PINEAPPLE_PID
 
 # Parent shell without an exported PATH (as the Pager runner starts payloads).
@@ -248,7 +257,7 @@ PATH="$FSBIN:$PATH" bash "$PAYLOAD"; assert_rc "$?" "0" "forking setsid: payload
 sleep 2
 assert_eq "$(grep -c $'^KILL\t-CONT ' "$REC")" "1" "forking setsid: watchdog did not fire a second SIGCONT"
 assert_eq "$(grep -c 'EXAMINE CANCEL' "$REC")" "1" "forking setsid: watchdog did not release the channel again"
-[ ! -e "$RF_BUDDY_RUN_DIR/watchdog.pid" ] && [ ! -e "$RF_BUDDY_RUN_DIR/clean-exit" ]; assert_rc "$?" "0" "forking setsid: pid file and marker removed after cleanup"
+[ ! -e "$RF_BUDDY_RUN_DIR/watchdog.pid" ] && [ -e "$RF_BUDDY_RUN_DIR/clean-exit" ]; assert_rc "$?" "0" "forking setsid: watchdog.pid removed, clean-exit marker kept"
 
 : > "$REC"; rm -f "$TMP/ui.pid"
 export FAKE_UI_LONG=1

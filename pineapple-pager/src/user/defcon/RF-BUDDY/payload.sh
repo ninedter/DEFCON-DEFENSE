@@ -204,7 +204,7 @@ rf_buddy_cleanup() {
   # Backstop: a SIGKILLed UI must never leave the buzzer sounding.
   [ -w "$BUZZER_DIR/brightness" ] && echo 0 > "$BUZZER_DIR/brightness" 2>/dev/null || true
   release_channel
-  rm -f "$READY_FILE" "$RUN_DIR/watchdog.pid" "$RUN_DIR/clean-exit"
+  rm -f "$READY_FILE" "$RUN_DIR/watchdog.pid"
   rf_lock_release
 }
 
