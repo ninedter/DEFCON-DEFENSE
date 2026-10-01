@@ -3,7 +3,7 @@ set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(dirname "$HERE")"
 . "$HERE/assert.sh"
-. "$ROOT/src/user/general/DEFCON_DEFENSE/rf_guard_lib.sh"
+. "$ROOT/src/user/defcon/DEFCON-DEFENSE/rf_guard_lib.sh"
 
 TMP="$(mktemp -d "${TMPDIR:-/tmp}/defcon-rf-test.XXXXXX")"
 cleanup() { [ -d "$TMP" ] && rm -rf -- "$TMP"; }
