@@ -15,6 +15,7 @@ import (
 	"os/signal"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -156,6 +157,14 @@ func run(o options) error {
 	view := newUI(engine, logger, time.Now)
 	tick := &tickWriter{path: o.tickFile}
 	defer func() { _ = tick.Set(0) }()
+	// Registered after the radio/capturer/logger defers so it runs before them:
+	// stop the workers and wait for them to return before releasing the channel
+	// and closing the capture socket and logger they use.
+	var workers sync.WaitGroup
+	defer func() {
+		cancel()
+		workers.Wait()
+	}()
 
 	mir := newMirror()
 	// Keep only one unhandled press so double clicks cannot skip a screen.
@@ -223,9 +232,17 @@ func run(o options) error {
 				engine.SetCapabilities(caps)
 				if caps.Bluetooth {
 					scanner := &BLEScanner{Iface: o.btIface, Counter: ble, Now: time.Now, RestartDelay: 2 * time.Second}
-					go scanner.Run(ctx)
+					workers.Add(1)
+					go func() {
+						defer workers.Done()
+						scanner.Run(ctx)
+					}()
 				}
-				go engine.Run(ctx)
+				workers.Add(1)
+				go func() {
+					defer workers.Done()
+					engine.Run(ctx)
+				}()
 			}
 			if err := redraw(); err != nil {
 				return err
