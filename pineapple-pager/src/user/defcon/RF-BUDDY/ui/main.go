@@ -57,7 +57,16 @@ func parseOptions(args []string) (options, error) {
 	return o, nil
 }
 
+// ensurePath gives the process a default PATH when the payload runner starts
+// it with none, so exec lookups of iw, hcitool and friends still resolve.
+func ensurePath() {
+	if os.Getenv("PATH") == "" {
+		_ = os.Setenv("PATH", "/usr/sbin:/usr/bin:/sbin:/bin")
+	}
+}
+
 func main() {
+	ensurePath()
 	o, err := parseOptions(os.Args[1:])
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)

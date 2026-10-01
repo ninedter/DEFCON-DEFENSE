@@ -70,3 +70,16 @@ func TestSessionTextListsConfigAndCapabilities(t *testing.T) {
 		}
 	}
 }
+
+func TestEnsurePathDefaultsOnlyWhenEmpty(t *testing.T) {
+	t.Setenv("PATH", "")
+	ensurePath()
+	if got := os.Getenv("PATH"); got != "/usr/sbin:/usr/bin:/sbin:/bin" {
+		t.Fatalf("PATH = %q", got)
+	}
+	t.Setenv("PATH", "/custom/bin")
+	ensurePath()
+	if got := os.Getenv("PATH"); got != "/custom/bin" {
+		t.Fatalf("non-empty PATH changed to %q", got)
+	}
+}
