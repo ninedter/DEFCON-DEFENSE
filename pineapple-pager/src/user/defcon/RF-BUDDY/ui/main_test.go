@@ -56,14 +56,18 @@ func TestTickLoopBeepsOnlyWhenActiveAndStops(t *testing.T) {
 	}
 	iv.Store(int64(20 * time.Millisecond))
 	time.Sleep(400 * time.Millisecond)
-	if readTrim(t, dir, "frequency") != "2000" {
-		t.Fatal("active loop must beep")
-	}
 	cancel()
 	select {
 	case <-done:
 	case <-time.After(time.Second):
 		t.Fatal("tickLoop did not exit on cancel")
+	}
+	// Read only after the loop has exited so no write is in flight.
+	if readTrim(t, dir, "frequency") != "2000" {
+		t.Fatal("active loop must beep")
+	}
+	if readTrim(t, dir, "brightness") != "0" {
+		t.Fatal("buzzer must be silent after the loop exits")
 	}
 }
 
