@@ -56,21 +56,21 @@ func TestParseLEAdvertEvent(t *testing.T) {
 		pkt  []byte
 		want []Advert
 	}{
-		{"real A", hx(t, realA), []Advert{{Addr: "02:68:EB:EC:8C:6E", RSSI: -77, Company: -1}}},
-		{"real B", hx(t, realB), []Advert{{Addr: "74:4D:BD:CD:0F:C5", RSSI: -90, Company: 0xB5B5}}},
+		{"real A", hx(t, realA), []Advert{{Addr: "02:68:EB:EC:8C:6E", RSSI: -77, Company: -1, Appearance: -1}}},
+		{"real B", hx(t, realB), []Advert{{Addr: "74:4D:BD:CD:0F:C5", RSSI: -90, Company: 0xB5B5, Appearance: -1}}},
 		{"name+tx", legacyEvt(legacy(a1, 0, nano, -60)),
-			[]Advert{{Addr: "01:02:03:04:05:06", RSSI: -60, Name: "NANOLEAF STRIP FCE", TxPower: 12, HasTx: true, Company: -1}}},
+			[]Advert{{Addr: "01:02:03:04:05:06", RSSI: -60, Name: "NANOLEAF STRIP FCE", TxPower: 12, HasTx: true, Company: -1, Appearance: -1}}},
 		{"airpods", legacyEvt(legacy(a1, 0, apple, -50)),
-			[]Advert{{Addr: "01:02:03:04:05:06", RSSI: -50, Company: 0x4C, Kind: "AIRPODS"}}},
+			[]Advert{{Addr: "01:02:03:04:05:06", RSSI: -50, Company: 0x4C, Appearance: -1, Kind: "AIRPODS"}}},
 		{"swift pair", legacyEvt(legacy(a1, 0, msft, -50)),
-			[]Advert{{Addr: "01:02:03:04:05:06", RSSI: -50, Company: 6, Kind: "SWIFT PAIR"}}},
+			[]Advert{{Addr: "01:02:03:04:05:06", RSSI: -50, Company: 6, Appearance: -1, Kind: "SWIFT PAIR"}}},
 		{"fast pair", legacyEvt(legacy(a1, 0, fast, -50)),
-			[]Advert{{Addr: "01:02:03:04:05:06", RSSI: -50, Company: -1, Kind: "FAST PAIR"}}},
+			[]Advert{{Addr: "01:02:03:04:05:06", RSSI: -50, Company: -1, Appearance: -1, Kind: "FAST PAIR", BrandHint: "GOOGLE"}}},
 		{"non-ascii name", legacyEvt(legacy(a1, 1, odd, -50)),
-			[]Advert{{Addr: "01:02:03:04:05:06", Random: true, RSSI: -50, Name: "CAF", Company: -1}}},
+			[]Advert{{Addr: "01:02:03:04:05:06", Random: true, RSSI: -50, Name: "CAF", Company: -1, Appearance: -1}}},
 		{"two reports", legacyEvt(legacy(a1, 0, nil, -40), legacy(a2, 1, nil, -41)),
-			[]Advert{{Addr: "01:02:03:04:05:06", RSSI: -40, Company: -1},
-				{Addr: "AA:BB:CC:DD:EE:FF", Random: true, RSSI: -41, Company: -1}}},
+			[]Advert{{Addr: "01:02:03:04:05:06", RSSI: -40, Company: -1, Appearance: -1},
+				{Addr: "AA:BB:CC:DD:EE:FF", Random: true, RSSI: -41, Company: -1, Appearance: -1}}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -101,7 +101,7 @@ func extEvt(addr [6]byte, ad []byte, rssi int8) []byte {
 func TestParseExtended(t *testing.T) {
 	ad := append([]byte{0x05, 0x09}, []byte("Ext1")...)
 	got := ParseLEAdvertEvent(extEvt([6]byte{1, 2, 3, 4, 5, 6}, ad, -70))
-	want := Advert{Addr: "01:02:03:04:05:06", Random: true, RSSI: -70, Name: "EXT1", Company: -1}
+	want := Advert{Addr: "01:02:03:04:05:06", Random: true, RSSI: -70, Name: "EXT1", Company: -1, Appearance: -1}
 	if len(got) != 1 || got[0] != want {
 		t.Fatalf("got %+v want %+v", got, want)
 	}
@@ -184,4 +184,105 @@ func TestReadBTSnoop(t *testing.T) {
 			t.Error("truncated record should error")
 		}
 	})
+}
+
+func parseOne(t *testing.T, ad []byte) Advert {
+	t.Helper()
+	got := ParseLEAdvertEvent(legacyEvt(legacy([6]byte{1, 2, 3, 4, 5, 6}, 0, ad, -50)))
+	if len(got) != 1 {
+		t.Fatalf("got %+v", got)
+	}
+	return got[0]
+}
+
+func mfr(company int, d ...byte) []byte {
+	return append([]byte{byte(3 + len(d)), 0xFF, byte(company), byte(company >> 8)}, d...)
+}
+
+func TestAppleTLVKinds(t *testing.T) {
+	tests := []struct {
+		name string
+		d    []byte
+		want string
+	}{
+		{"nearby then handoff", []byte{0x10, 0x01, 0xAA, 0x0C, 0x01, 0xBB}, "HANDOFF"},
+		{"find my alone", []byte{0x12, 0x02, 0x00, 0x01}, "FIND MY"},
+		{"airpods beats find my", []byte{0x12, 0x01, 0x00, 0x07, 0x01, 0x00}, "AIRPODS"},
+		{"truncated tlv no panic", []byte{0x10, 0x01, 0xAA, 0x0C, 0x09}, "HANDOFF"},
+		{"unknown type", []byte{0x99, 0x00}, ""},
+		{"airplay", []byte{0x09, 0x01, 0x00}, "AIRPLAY"},
+	}
+	for _, tc := range tests {
+		if a := parseOne(t, mfr(0x4C, tc.d...)); a.Kind != tc.want {
+			t.Errorf("%s: kind %q want %q", tc.name, a.Kind, tc.want)
+		}
+	}
+	if a := parseOne(t, mfr(0x06, 0x01, 0x00)); a.Kind != "WINDOWS" {
+		t.Errorf("windows %q", a.Kind)
+	}
+}
+
+func TestAppearanceType(t *testing.T) {
+	tests := map[int]string{
+		-1: "", 0: "", 0x0040: "PHONE", 0x00C0: "WATCH", 0x0200: "TAG" + "", 0x03C1: "KEYBOARD",
+		0x03C2: "MOUSE", 0x03C0: "HID", 0x0941: "EARBUD", 0x0943: "HEADPHONES", 0x0940: "AUDIO",
+		0x0480: "CYCLING SENSOR", 0x7FFF: "",
+	}
+	tests[0x0200] = "TAG"
+	tests[0x0480] = "CYCLING SENSOR"
+	for v, want := range tests {
+		if got := AppearanceType(v); got != want {
+			t.Errorf("%#x: got %q want %q", v, got, want)
+		}
+	}
+	if a := parseOne(t, []byte{0x03, 0x19, 0xC1, 0x03}); a.Appearance != 0x3C1 || a.Kind != "KEYBOARD" {
+		t.Errorf("appearance advert %+v", a)
+	}
+}
+
+func TestServiceKinds(t *testing.T) {
+	tests := []struct {
+		name       string
+		ad         []byte
+		kind, hint string
+	}{
+		{"tile data", []byte{0x05, 0x16, 0xED, 0xFE, 0x01, 0x02}, "TRACKER", "TILE"},
+		{"tile uuid list", []byte{0x03, 0x03, 0xEC, 0xFE}, "TRACKER", "TILE"},
+		{"smarttag data", []byte{0x04, 0x16, 0x5A, 0xFD, 0x01}, "SMARTTAG", "SAMSUNG"},
+		{"smarttag list", []byte{0x03, 0x02, 0x5A, 0xFD}, "SMARTTAG", "SAMSUNG"},
+		{"eddystone", []byte{0x03, 0x03, 0xAA, 0xFE}, "EDDYSTONE", ""},
+		{"exposure", []byte{0x03, 0x16, 0x6F, 0xFD}, "EXPOSURE NOTIF", ""},
+		{"fast pair", []byte{0x03, 0x16, 0x2C, 0xFE}, "FAST PAIR", "GOOGLE"},
+		{"google only", []byte{0x03, 0x03, 0x9F, 0xFE}, "", "GOOGLE"},
+		{"list second uuid", []byte{0x05, 0x03, 0x0F, 0x18, 0xED, 0xFE}, "TRACKER", "TILE"},
+	}
+	for _, tc := range tests {
+		if a := parseOne(t, tc.ad); a.Kind != tc.kind || a.BrandHint != tc.hint {
+			t.Errorf("%s: %+v", tc.name, a)
+		}
+	}
+	// Fast Pair hint only when there is no company id.
+	ad := append(mfr(0x0075, 0x01), 0x03, 0x16, 0x2C, 0xFE)
+	if a := parseOne(t, ad); a.BrandHint != "" || a.Kind != "FAST PAIR" {
+		t.Errorf("fast pair with company %+v", a)
+	}
+}
+
+func TestKindPrecedenceOrderIndependent(t *testing.T) {
+	m := mfr(0x4C, 0x12, 0x01, 0x00)
+	s := []byte{0x03, 0x16, 0x2C, 0xFE}
+	p := []byte{0x03, 0x19, 0x40, 0x00}
+	orders := [][][]byte{{m, s, p}, {p, s, m}, {s, m, p}, {p, m, s}}
+	for _, o := range orders {
+		var ad []byte
+		for _, x := range o {
+			ad = append(ad, x...)
+		}
+		if a := parseOne(t, ad); a.Kind != "FIND MY" {
+			t.Errorf("order kind %q", a.Kind)
+		}
+	}
+	if a := parseOne(t, append(append([]byte{}, p...), s...)); a.Kind != "FAST PAIR" {
+		t.Errorf("service over appearance: %q", a.Kind)
+	}
 }

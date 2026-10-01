@@ -11,14 +11,16 @@ import (
 
 // Advert is one decoded BLE advertising report.
 type Advert struct {
-	Addr    string // "AA:BB:CC:DD:EE:FF", display order (wire order reversed)
-	Random  bool
-	RSSI    int
-	Name    string
-	TxPower int
-	HasTx   bool
-	Company int // -1 when absent
-	Kind    string
+	Addr       string // "AA:BB:CC:DD:EE:FF", display order (wire order reversed)
+	Random     bool
+	RSSI       int
+	Name       string
+	TxPower    int
+	HasTx      bool
+	Company    int // -1 when absent
+	Kind       string
+	Appearance int // GAP appearance value, -1 when absent
+	BrandHint  string
 }
 
 const (
@@ -144,9 +146,35 @@ func fmtAddr(b []byte) string {
 }
 
 // parseAD walks the [len][type][data] structures of an advert payload.
+// Kind precedence is order independent: manufacturer data > service > appearance.
 func parseAD(ad []byte, a *Advert) {
 	a.Company = -1
-	short := ""
+	a.Appearance = -1
+	short, mfr, svc := "", "", ""
+	fastPair := false
+	service := func(uuid int) {
+		kind, hint := "", ""
+		switch uuid {
+		case 0xFEED, 0xFEEC:
+			kind, hint = "TRACKER", "TILE"
+		case 0xFD5A:
+			kind, hint = "SMARTTAG", "SAMSUNG"
+		case 0xFEAA:
+			kind = "EDDYSTONE"
+		case 0xFE2C:
+			kind, fastPair = "FAST PAIR", true
+		case 0xFD6F:
+			kind = "EXPOSURE NOTIF"
+		case 0xFE9F:
+			hint = "GOOGLE"
+		}
+		if kind != "" && svc == "" {
+			svc = kind
+		}
+		if hint != "" && a.BrandHint == "" {
+			a.BrandHint = hint
+		}
+	}
 	for len(ad) >= 2 {
 		l := int(ad[0])
 		if l == 0 || len(ad) < 1+l {
@@ -163,27 +191,112 @@ func parseAD(ad []byte, a *Advert) {
 			if len(d) >= 1 {
 				a.TxPower, a.HasTx = int(int8(d[0])), true
 			}
+		case 0x19:
+			if len(d) >= 2 {
+				a.Appearance = int(d[0]) | int(d[1])<<8
+			}
 		case 0xFF:
 			if len(d) >= 2 {
 				a.Company = int(d[0]) | int(d[1])<<8
-				if k := mfrKind(a.Company, d[2:]); k != "" && a.Kind == "" {
-					a.Kind = k
+				if k := mfrKind(a.Company, d[2:]); k != "" && mfr == "" {
+					mfr = k
 				}
 			}
 		case 0x16:
 			if len(d) >= 2 {
-				switch int(d[0]) | int(d[1])<<8 {
-				case 0xFE2C:
-					a.Kind = "FAST PAIR"
-				case 0xFD6F:
-					a.Kind = "EXPOSURE NOTIF"
-				}
+				service(int(d[0]) | int(d[1])<<8)
+			}
+		case 0x02, 0x03:
+			for i := 0; i+1 < len(d); i += 2 {
+				service(int(d[i]) | int(d[i+1])<<8)
 			}
 		}
 	}
 	if a.Name == "" {
 		a.Name = short
 	}
+	if fastPair && a.Company < 0 && a.BrandHint == "" {
+		a.BrandHint = "GOOGLE"
+	}
+	switch {
+	case mfr != "":
+		a.Kind = mfr
+	case svc != "":
+		a.Kind = svc
+	default:
+		a.Kind = AppearanceType(a.Appearance)
+	}
+}
+
+// AppearanceType names the GAP appearance value, or "" when unknown.
+func AppearanceType(v int) string {
+	if v < 0 {
+		return ""
+	}
+	switch v {
+	case 0x0940:
+		return "AUDIO"
+	case 0x0941:
+		return "EARBUD"
+	case 0x0942:
+		return "HEADSET"
+	case 0x0943:
+		return "HEADPHONES"
+	case 0x0944:
+		return "NECKBAND"
+	case 0x03C1:
+		return "KEYBOARD"
+	case 0x03C2:
+		return "MOUSE"
+	case 0x03C3:
+		return "JOYSTICK"
+	case 0x03C4:
+		return "GAMEPAD"
+	case 0x03C5:
+		return "TABLET"
+	}
+	names := [...]string{1: "PHONE", 2: "COMPUTER", 3: "WATCH", 4: "CLOCK", 5: "DISPLAY",
+		6: "REMOTE", 7: "GLASSES", 8: "TAG", 9: "KEYRING", 10: "MEDIA PLAYER",
+		11: "BARCODE SCANNER", 12: "THERMOMETER", 13: "HEART RATE", 14: "BLOOD PRESSURE",
+		15: "HID", 16: "GLUCOSE METER", 17: "RUNNING SENSOR", 18: "CYCLING SENSOR"}
+	if c := v >> 6; c >= 1 && c < len(names) {
+		return names[c]
+	}
+	return ""
+}
+
+// appleKinds maps Apple continuity TLV types to kinds, listed most specific first.
+var appleKinds = []struct {
+	typ  byte
+	kind string
+}{
+	{0x07, "AIRPODS"}, {0x0B, "WATCH"}, {0x12, "FIND MY"}, {0x02, "IBEACON"},
+	{0x05, "AIRDROP"}, {0x0C, "HANDOFF"}, {0x0D, "HOTSPOT"}, {0x0E, "HOTSPOT"},
+	{0x06, "HOMEKIT"}, {0x08, "HEY SIRI"}, {0x09, "AIRPLAY"}, {0x0A, "AIRPLAY"},
+	{0x0F, "NEARBY ACTION"}, {0x10, "NEARBY"},
+}
+
+// appleKind walks the [type][len][data] TLVs and returns the most specific
+// kind. A TLV whose length overruns the buffer still counts by its type.
+func appleKind(d []byte) string {
+	best := len(appleKinds)
+	for len(d) >= 2 {
+		for i := 0; i < best; i++ {
+			if appleKinds[i].typ == d[0] {
+				best = i
+				break
+			}
+		}
+		l := int(d[1])
+		if len(d) < 2+l {
+			break
+		}
+		d = d[2+l:]
+	}
+	if best == len(appleKinds) {
+		return ""
+	}
+	return appleKinds[best].kind
 }
 
 // mfrKind hints a device type from manufacturer data (after the company id).
@@ -193,20 +306,12 @@ func mfrKind(company int, d []byte) string {
 	}
 	switch company {
 	case 0x004C:
-		switch d[0] {
-		case 0x07:
-			return "AIRPODS"
-		case 0x10:
-			return "NEARBY"
-		case 0x12:
-			return "FIND MY"
-		case 0x09:
-			return "AIRPLAY"
-		case 0x02:
-			return "IBEACON"
-		}
+		return appleKind(d)
 	case 0x0006:
-		if d[0] == 0x03 {
+		switch d[0] {
+		case 0x01:
+			return "WINDOWS"
+		case 0x03:
 			return "SWIFT PAIR"
 		}
 	}

@@ -28,10 +28,11 @@ func TestBLELabel(t *testing.T) {
 		d    BLEDevice
 		want string
 	}{
-		{BLEDevice{Name: "TAG", Maker: "APPLE", Kind: "X"}, "TAG"},
-		{BLEDevice{Maker: "APPLE", Kind: "AIRPODS"}, "APPLE AIRPODS"},
-		{BLEDevice{Kind: "FAST PAIR"}, "FAST PAIR"},
-		{BLEDevice{Maker: "BOSE"}, "BOSE DEVICE"},
+		{BLEDevice{Name: "TAG", Brand: "APPLE", Type: "X"}, "TAG"},
+		{BLEDevice{Brand: "APPLE", Type: "AIRPODS"}, "APPLE AIRPODS"},
+		{BLEDevice{Brand: "UNKNOWN", Type: "FAST PAIR", Addr: "4B:63:B5:11:22:33"}, "UNKNOWN 4B:63:B5"},
+		{BLEDevice{Brand: "GOOGLE", Type: "FAST PAIR"}, "GOOGLE FAST PAIR"},
+		{BLEDevice{Brand: "BOSE", Type: "OTHER"}, "BOSE DEVICE"},
 		{BLEDevice{Addr: "4B:63:B5:11:22:33"}, "UNKNOWN 4B:63:B5"},
 	}
 	for _, tc := range tests {
@@ -188,5 +189,44 @@ func TestObserveSteadyStateDoesNotAllocateWithWindow(t *testing.T) {
 	})
 	if allocs > 0.5 {
 		t.Fatalf("Observe allocs/op = %v, want amortized ~0 (no per-advert window copy)", allocs)
+	}
+}
+
+func TestBrandAndTypeDerivation(t *testing.T) {
+	tests := []struct {
+		name       string
+		a          Advert
+		brand, typ string
+		label      string
+	}{
+		{"company", Advert{Addr: "AA:BB:CC:DD:EE:01", Company: 0x4C, Kind: "FIND MY", Appearance: -1}, "APPLE", "FIND MY", "APPLE FIND MY"},
+		{"unknown id", Advert{Addr: "AA:BB:CC:DD:EE:02", Company: 0xB5B5, Appearance: -1}, "ID B5B5", "OTHER", "ID B5B5 DEVICE"},
+		{"hint", Advert{Addr: "AA:BB:CC:DD:EE:03", Company: -1, BrandHint: "TILE", Kind: "TRACKER", Appearance: -1}, "TILE", "TRACKER", "TILE TRACKER"},
+		{"name word", Advert{Addr: "AA:BB:CC:DD:EE:04", Company: -1, Appearance: -1, Name: "NANOLEAF STRIP FCE"}, "NANOLEAF", "OTHER", "NANOLEAF STRIP FCE"},
+		{"name punct", Advert{Addr: "AA:BB:CC:DD:EE:05", Company: -1, Appearance: -1, Name: "[BOSE-QC] 35"}, "BOSE-QC", "OTHER", "[BOSE-QC] 35"},
+		{"digit name", Advert{Addr: "AA:BB:CC:DD:EE:06", Company: -1, Appearance: -1, Name: "1234 5"}, "UNKNOWN", "OTHER", "1234 5"},
+		{"unknown", Advert{Addr: "AA:BB:CC:DD:EE:07", Company: -1, Appearance: -1}, "UNKNOWN", "OTHER", "UNKNOWN AA:BB:CC"},
+		{"appearance type", Advert{Addr: "AA:BB:CC:DD:EE:08", Company: 0x75, Appearance: 0x03C1, Kind: "KEYBOARD"}, "SAMSUNG", "KEYBOARD", "SAMSUNG KEYBOARD"},
+	}
+	for _, tc := range tests {
+		tr := NewBLETracker(time.Minute)
+		tr.Observe(tc.a, t0)
+		d := tr.Devices(t0)[0]
+		if d.Brand != tc.brand || d.Type != tc.typ || d.Label != tc.label {
+			t.Errorf("%s: %q/%q/%q", tc.name, d.Brand, d.Type, d.Label)
+		}
+		if !d.FirstSeen.Equal(t0) {
+			t.Errorf("%s: first seen %v", tc.name, d.FirstSeen)
+		}
+	}
+}
+
+func TestStickyAppearanceAndHint(t *testing.T) {
+	tr := NewBLETracker(time.Minute)
+	tr.Observe(Advert{Addr: "A", Company: -1, Appearance: 0x0941, BrandHint: "GOOGLE"}, t0)
+	tr.Observe(Advert{Addr: "A", Company: -1, Appearance: -1}, t0.Add(time.Second))
+	d := tr.Devices(t0.Add(time.Second))[0]
+	if d.Appearance != "EARBUD" || d.Brand != "GOOGLE" || d.Type != "EARBUD" || !d.FirstSeen.Equal(t0) {
+		t.Errorf("%+v", d)
 	}
 }

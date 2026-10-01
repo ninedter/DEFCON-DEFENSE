@@ -4,6 +4,7 @@ import (
 	"math"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -18,18 +19,22 @@ const (
 
 // BLEDevice is the display state of one tracked BLE address.
 type BLEDevice struct {
-	Addr      string
-	Random    bool
-	Label     string
-	Maker     string
-	Kind      string
-	Name      string
-	RSSI      int
-	Peak      int
-	AdvPerSec float64
-	TxPower   int
-	HasTx     bool
-	LastSeen  time.Time
+	Addr       string
+	Random     bool
+	Label      string
+	Maker      string
+	Kind       string
+	Brand      string
+	Type       string
+	Appearance string
+	FirstSeen  time.Time
+	Name       string
+	RSSI       int
+	Peak       int
+	AdvPerSec  float64
+	TxPower    int
+	HasTx      bool
+	LastSeen   time.Time
 }
 
 // BLETrackView is the walk-around view of the one device being tracked.
@@ -51,6 +56,8 @@ type bleEntry struct {
 	random   bool
 	company  int
 	kind     string
+	hint     string
+	appear   string
 	name     string
 	lastRSSI int
 	peak     int
@@ -102,6 +109,12 @@ func (t *BLETracker) Observe(a Advert, at time.Time) {
 	}
 	if a.Kind != "" {
 		e.kind = a.Kind
+	}
+	if a.BrandHint != "" {
+		e.hint = a.BrandHint
+	}
+	if at := AppearanceType(a.Appearance); at != "" {
+		e.appear = at
 	}
 	if a.HasTx {
 		e.tx, e.hasTx = a.TxPower, true
@@ -203,27 +216,90 @@ func (e *bleEntry) device(now time.Time) BLEDevice {
 		Addr: e.addr, Random: e.random, Maker: CompanyName(e.company), Kind: e.kind,
 		Name: e.name, RSSI: rssi, Peak: e.peak, AdvPerSec: float64(cnt) / span,
 		TxPower: e.tx, HasTx: e.hasTx, LastSeen: e.last,
+		Appearance: e.appear, FirstSeen: e.first,
 	}
+	d.Brand = bleBrand(d, e.hint)
+	d.Type = bleType(d)
 	d.Label = bleLabel(d)
 	return d
 }
 
-func bleLabel(d BLEDevice) string {
+// bleBrand picks the best brand name: maker, service hint, first word of
+// the name, else UNKNOWN.
+func bleBrand(d BLEDevice, hint string) string {
 	switch {
-	case d.Name != "":
-		return d.Name
-	case d.Kind != "" && d.Maker != "":
-		return d.Maker + " " + d.Kind
+	case d.Maker != "":
+		return d.Maker
+	case hint != "":
+		return hint
+	}
+	return nameWord(d.Name)
+}
+
+// nameWord returns the first word of name trimmed to letters/digits at both
+// ends, or UNKNOWN when the name has no letter.
+func nameWord(name string) string {
+	hasLetter := false
+	for i := 0; i < len(name); i++ {
+		if c := name[i]; c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z' {
+			hasLetter = true
+			break
+		}
+	}
+	if !hasLetter {
+		return "UNKNOWN"
+	}
+	w := name
+	if i := strings.IndexByte(w, ' '); i >= 0 {
+		w = w[:i]
+	}
+	alnum := func(c byte) bool {
+		return c >= '0' && c <= '9' || c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z'
+	}
+	for len(w) > 0 && !alnum(w[0]) {
+		w = w[1:]
+	}
+	for len(w) > 0 && !alnum(w[len(w)-1]) {
+		w = w[:len(w)-1]
+	}
+	if w == "" {
+		return "UNKNOWN"
+	}
+	return w
+}
+
+func bleType(d BLEDevice) string {
+	switch {
 	case d.Kind != "":
 		return d.Kind
-	case d.Maker != "":
-		return d.Maker + " DEVICE"
+	case d.Appearance != "":
+		return d.Appearance
 	}
-	a := d.Addr
-	if len(a) > 8 {
-		a = a[:8]
+	return "OTHER"
+}
+
+func bleLabel(d BLEDevice) string {
+	if d.Name != "" {
+		return d.Name
 	}
-	return "UNKNOWN " + a
+	brand, typ := d.Brand, d.Type
+	if brand == "" {
+		brand = "UNKNOWN"
+	}
+	if typ == "" {
+		typ = "OTHER"
+	}
+	if brand == "UNKNOWN" {
+		a := d.Addr
+		if len(a) > 8 {
+			a = a[:8]
+		}
+		return "UNKNOWN " + a
+	}
+	if typ == "OTHER" {
+		return brand + " DEVICE"
+	}
+	return brand + " " + typ
 }
 
 // AdvPerSec is the all-device advert rate over the last 10 s.
