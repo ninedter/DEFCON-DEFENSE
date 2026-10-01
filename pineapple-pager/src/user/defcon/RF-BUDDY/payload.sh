@@ -28,8 +28,11 @@ PAYLOAD_ROOT="/root/payloads"
 # so prefer the stable installed payload path for the UI binary.
 INSTALLED_DIR="${RF_BUDDY_INSTALL_DIR:-$PAYLOAD_ROOT/user/defcon/RF-BUDDY}"
 SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+MMC_DIR="/mmc/root/payloads/user/defcon/RF-BUDDY"
 if [ -f "$INSTALLED_DIR/payload.sh" ]; then
   DIR="$INSTALLED_DIR"
+elif [ -f "$MMC_DIR/payload.sh" ]; then
+  DIR="$MMC_DIR"
 else
   DIR="$SOURCE_DIR"
 fi

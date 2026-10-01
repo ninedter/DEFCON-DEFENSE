@@ -26,6 +26,7 @@ export RF_BUDDY_LOOT_DIR="$TMP/loot"
 export RF_BUDDY_RUN_DIR="$TMP/run"
 export RF_BUDDY_LOCK_DIR="$TMP/rf_buddy.lock"
 
+rg -q '/mmc/root/payloads/user/defcon/RF-BUDDY' "$PAYLOAD"; assert_rc "$?" "0" "payload falls back to the /mmc install path"
 bash -n "$PAYLOAD"; assert_rc "$?" "0" "payload.sh passes bash -n"
 rg -q '^# Title: RF-BUDDY$' "$PAYLOAD"; assert_rc "$?" "0" "payload title is RF-BUDDY"
 rg -q '^OFFICE_SSID=""' "$PAYLOAD"; assert_rc "$?" "0" "OFFICE_SSID is configurable and blank by default"
