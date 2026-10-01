@@ -15,7 +15,7 @@ func newTestEngine(r *fakeRadio, clock *fakeClock, sink SampleSink, office strin
 	cfg.Dwell = testDwell
 	cfg.OfficeSSID = office
 	cfg.RetryBackoff = time.Millisecond
-	e := NewEngine(cfg, r, NewInventory(nil), NewBLECounter(30*time.Second), sink, clock.Now)
+	e := NewEngine(cfg, r, NewInventory(nil), NewBLETracker(30*time.Second), sink, clock.Now)
 	e.SetCapabilities(Capabilities{Tune: true, Capture: true})
 	return e
 }
@@ -270,5 +270,32 @@ func TestEngineLockedChannelTuneFailureBacksOffWithoutSkipping(t *testing.T) {
 	steps(e, 1)
 	if n := r.attemptCount(ch); n != 2 {
 		t.Fatalf("tune attempts = %d, want 2", n)
+	}
+}
+
+func TestEngineSnapshotCarriesBT(t *testing.T) {
+	clock := newFakeClock()
+	e := newTestEngine(&fakeRadio{}, clock, nil, "")
+	tr := e.ble
+	tr.Observe(Advert{Addr: "AA:BB:CC:DD:EE:01", RSSI: -50, Company: -1}, clock.Now())
+	tr.Observe(Advert{Addr: "AA:BB:CC:DD:EE:02", RSSI: -70, Company: -1}, clock.Now())
+
+	if s := e.Snapshot(); s.HasBT || s.BT != nil || s.BTTrack != nil {
+		t.Fatalf("BT present without capability: %+v", s)
+	}
+	e.SetCapabilities(Capabilities{Tune: true, Capture: true, Bluetooth: true})
+	s := e.Snapshot()
+	if !s.HasBT || s.BTCount != 2 || len(s.BT) != 2 || s.BT[0].Addr != "AA:BB:CC:DD:EE:01" || s.BTTrack != nil {
+		t.Fatalf("snapshot BT = %+v", s)
+	}
+	rev := s.Revision
+	e.TrackBT("AA:BB:CC:DD:EE:02")
+	s = e.Snapshot()
+	if s.BTTrack == nil || s.BTTrack.Addr != "AA:BB:CC:DD:EE:02" || s.Revision == rev {
+		t.Fatalf("track = %+v rev %d", s.BTTrack, s.Revision)
+	}
+	e.UntrackBT()
+	if s = e.Snapshot(); s.BTTrack != nil {
+		t.Fatalf("still tracking: %+v", s.BTTrack)
 	}
 }

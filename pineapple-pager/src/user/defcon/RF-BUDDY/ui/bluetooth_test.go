@@ -17,28 +17,11 @@ func TestParseLEScanLine(t *testing.T) {
 	}
 }
 
-func TestBLECounterRollingWindow(t *testing.T) {
-	t0 := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
-	c := NewBLECounter(30 * time.Second)
-	c.Observe("A", t0)
-	c.Observe("B", t0.Add(20*time.Second))
-	c.Observe("A", t0.Add(25*time.Second))
-	if got := c.Count(t0.Add(29 * time.Second)); got != 2 {
-		t.Fatalf("count = %d, want 2", got)
-	}
-	if got := c.Count(t0.Add(51 * time.Second)); got != 1 {
-		t.Fatalf("count after B expires = %d, want 1", got)
-	}
-	if got := c.Count(t0.Add(56 * time.Second)); got != 0 {
-		t.Fatalf("count after window = %d, want 0", got)
-	}
-}
-
 func TestBLEScannerConsumesHcitoolOutput(t *testing.T) {
 	now := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
-	s := &BLEScanner{Counter: NewBLECounter(30 * time.Second), Now: func() time.Time { return now }}
+	s := &BLEScanner{Tracker: NewBLETracker(30 * time.Second), Now: func() time.Time { return now }}
 	s.consume(strings.NewReader("LE Scan ...\nAA:BB:CC:DD:EE:01 (unknown)\naa:bb:cc:dd:ee:01 Phone\nAA:BB:CC:DD:EE:02 (unknown)\nnoise\n"))
-	if got := s.Counter.Count(now); got != 2 {
+	if got := s.Tracker.Count(now); got != 2 {
 		t.Fatalf("unique devices = %d, want 2", got)
 	}
 }
@@ -52,5 +35,20 @@ func TestLEScanIsPassive(t *testing.T) {
 func TestScanDisableArgs(t *testing.T) {
 	if got := strings.Join(scanDisableArgs("hci0"), " "); got != "-i hci0 cmd 0x08 0x000c 00 00" {
 		t.Fatalf("scanDisableArgs = %q", got)
+	}
+}
+
+func TestHcidumpArgs(t *testing.T) {
+	if got := strings.Join(hcidumpArgs("hci0"), " "); got != "-i hci0 -w /dev/stdout" {
+		t.Fatalf("hcidumpArgs = %q", got)
+	}
+}
+
+func TestBLEScannerConsumesHcidumpStream(t *testing.T) {
+	now := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	s := &BLEScanner{Tracker: NewBLETracker(30 * time.Second), Now: func() time.Time { return now }}
+	s.consumeDump(strings.NewReader("garbage that is not btsnoop"))
+	if got := s.Tracker.Count(now); got != 0 {
+		t.Fatalf("devices from bad stream = %d", got)
 	}
 }

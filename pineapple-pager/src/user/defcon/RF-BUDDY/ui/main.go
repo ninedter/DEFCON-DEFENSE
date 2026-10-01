@@ -142,7 +142,7 @@ func run(o options) error {
 	cfg.Dwell = time.Duration(o.dwellMS) * time.Millisecond
 	cfg.Thresholds = o.thresholds
 	cfg.OfficeSSID = o.officeSSID
-	ble := NewBLECounter(30 * time.Second)
+	ble := NewBLETracker(30 * time.Second)
 	engine := NewEngine(cfg, radio, NewInventory(nil), ble, logger, time.Now)
 	view := newUI(engine, logger, time.Now)
 	// Registered first among these three so it runs LAST (defers are LIFO):
@@ -228,6 +228,7 @@ func run(o options) error {
 	owner := time.NewTicker(ownershipPollInterval)
 	defer owner.Stop()
 	minute := time.Now().Minute()
+	var btRedrawSec int64
 	for {
 		select {
 		case <-ctx.Done():
@@ -245,7 +246,7 @@ func run(o options) error {
 			} else {
 				engine.SetCapabilities(caps)
 				if caps.Bluetooth {
-					scanner := &BLEScanner{Iface: o.btIface, Counter: ble, Now: time.Now, RestartDelay: 2 * time.Second}
+					scanner := &BLEScanner{Iface: o.btIface, Tracker: ble, Now: time.Now, RestartDelay: 2 * time.Second}
 					workers.Add(1)
 					go func() {
 						defer workers.Done()
@@ -275,6 +276,10 @@ func run(o options) error {
 			}
 		case now := <-ticker.C:
 			changed := view.Advance(now)
+			if view.LiveBT() && now.Unix() != btRedrawSec {
+				// BT screens refresh once a second even when Wi-Fi publishes nothing.
+				btRedrawSec, changed = now.Unix(), true
+			}
 			tickNS.Store(int64(view.TickInterval(engine.Snapshot())))
 			if changed || now.Minute() != minute {
 				minute = now.Minute()

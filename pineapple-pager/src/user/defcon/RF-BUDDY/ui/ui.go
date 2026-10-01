@@ -27,6 +27,8 @@ type Controller interface {
 	SetBand(Band)
 	Lock(Channel)
 	Unlock()
+	TrackBT(addr string)
+	UntrackBT()
 }
 
 type MarkSink interface {
@@ -63,6 +65,9 @@ func (u *ui) SetProbe(c Capabilities) {
 	u.screen = screenProbe
 	u.probeUntil = u.now().Add(probeResultHold)
 }
+
+// LiveBT reports whether a BT screen is showing and needs periodic redraws.
+func (u *ui) LiveBT() bool { return false }
 
 // Advance applies time-based transitions and reports whether the screen changed.
 func (u *ui) Advance(now time.Time) bool {

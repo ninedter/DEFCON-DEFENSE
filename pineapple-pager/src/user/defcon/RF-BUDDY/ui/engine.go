@@ -57,15 +57,18 @@ type LockView struct {
 }
 
 type Snapshot struct {
-	Revision   uint64
-	Band       Band
-	Channels24 []ChannelView
-	Channels5  []ChannelView
-	Lock       *LockView
-	BTCount    int
-	HasBT      bool
-	LogPaused  bool
-	RadioError string
+	Revision    uint64
+	Band        Band
+	Channels24  []ChannelView
+	Channels5   []ChannelView
+	Lock        *LockView
+	BTCount     int
+	HasBT       bool
+	BT          []BLEDevice
+	BTAdvPerSec float64
+	BTTrack     *BLETrackView
+	LogPaused   bool
+	RadioError  string
 }
 
 func (s Snapshot) Channels(b Band) []ChannelView {
@@ -81,7 +84,7 @@ type Engine struct {
 	cfg   EngineConfig
 	radio Radio
 	inv   *Inventory
-	ble   *BLECounter
+	ble   *BLETracker
 	sink  SampleSink
 	now   func() time.Time
 
@@ -105,7 +108,7 @@ type Engine struct {
 	radioErr   string
 }
 
-func NewEngine(cfg EngineConfig, radio Radio, inv *Inventory, ble *BLECounter, sink SampleSink, now func() time.Time) *Engine {
+func NewEngine(cfg EngineConfig, radio Radio, inv *Inventory, ble *BLETracker, sink SampleSink, now func() time.Time) *Engine {
 	return &Engine{
 		cfg: cfg, radio: radio, inv: inv, ble: ble, sink: sink, now: now,
 		views: map[Channel]ChannelView{}, smooth: map[Channel]float64{}, smoothAt: map[Channel]time.Time{},
@@ -145,6 +148,28 @@ func (e *Engine) Unlock() {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.lockTarget, e.lock, e.lockRaw, e.queue = nil, nil, nil, nil
+	e.publishLocked()
+}
+
+// TrackBT starts tracking one BLE device and wakes the UI.
+func (e *Engine) TrackBT(addr string) {
+	if e.ble == nil {
+		return
+	}
+	e.ble.Track(addr)
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.publishLocked()
+}
+
+// UntrackBT stops BLE tracking and wakes the UI.
+func (e *Engine) UntrackBT() {
+	if e.ble == nil {
+		return
+	}
+	e.ble.Untrack()
+	e.mu.Lock()
+	defer e.mu.Unlock()
 	e.publishLocked()
 }
 
@@ -420,7 +445,11 @@ func (e *Engine) Snapshot() Snapshot {
 		s.Lock = &l
 	}
 	if e.caps.Bluetooth && e.ble != nil {
-		s.BTCount, s.HasBT = e.ble.Count(e.now()), true
+		now := e.now()
+		s.BTCount, s.HasBT = e.ble.Count(now), true
+		s.BT = e.ble.Devices(now)
+		s.BTAdvPerSec = e.ble.AdvPerSec(now)
+		s.BTTrack = e.ble.Tracked(now)
 	}
 	if e.sink != nil {
 		s.LogPaused = e.sink.Paused()

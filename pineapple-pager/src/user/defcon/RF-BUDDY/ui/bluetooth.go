@@ -8,7 +8,6 @@ import (
 	"os/exec"
 	"regexp"
 	"strings"
-	"sync"
 	"time"
 )
 
@@ -23,40 +22,11 @@ func ParseLEScanLine(line string) (string, bool) {
 	return strings.ToUpper(fields[0]), true
 }
 
-// BLECounter counts unique BLE addresses seen inside a rolling window.
-type BLECounter struct {
-	mu     sync.Mutex
-	window time.Duration
-	seen   map[string]time.Time
-}
-
-func NewBLECounter(window time.Duration) *BLECounter {
-	return &BLECounter{window: window, seen: map[string]time.Time{}}
-}
-
-func (c *BLECounter) Observe(addr string, at time.Time) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if last, ok := c.seen[addr]; !ok || at.After(last) {
-		c.seen[addr] = at
-	}
-}
-
-func (c *BLECounter) Count(now time.Time) int {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	for addr, at := range c.seen {
-		if now.Sub(at) > c.window {
-			delete(c.seen, addr)
-		}
-	}
-	return len(c.seen)
-}
-
-// BLEScanner keeps a passive `hcitool lescan` running and feeds the counter.
+// BLEScanner keeps a passive `hcitool lescan` running and, when hcidump is
+// available, decodes its btsnoop stream into the tracker.
 type BLEScanner struct {
 	Iface        string
-	Counter      *BLECounter
+	Tracker      *BLETracker
 	Now          func() time.Time
 	RestartDelay time.Duration
 }
@@ -64,6 +34,11 @@ type BLEScanner struct {
 // leScanArgs returns the hcitool arguments for a passive LE scan.
 func leScanArgs(iface string) []string {
 	return []string{"-i", iface, "lescan", "--passive", "--duplicates"}
+}
+
+// hcidumpArgs returns the hcidump arguments that stream btsnoop to stdout.
+func hcidumpArgs(iface string) []string {
+	return []string{"-i", iface, "-w", "/dev/stdout"}
 }
 
 // scanDisableArgs returns the hcitool arguments for LE Set Scan Enable = off.
@@ -76,10 +51,43 @@ func (s *BLEScanner) disableScan(ctx context.Context) {
 	_ = exec.CommandContext(ctx, "hcitool", scanDisableArgs(s.Iface)...).Run()
 }
 
+// startDump launches hcidump as a sibling child (same SIGINT cancel, 2 s
+// WaitDelay and child-death signal as lescan) and returns a stop function that
+// signals it and waits for the child and the decoder goroutine. nil when
+// hcidump is missing or fails to start.
+func (s *BLEScanner) startDump(ctx context.Context) (stop func()) {
+	path, err := exec.LookPath("hcidump")
+	if err != nil {
+		return nil
+	}
+	dctx, cancel := context.WithCancel(ctx)
+	cmd := exec.CommandContext(dctx, path, hcidumpArgs(s.Iface)...)
+	cmd.Cancel = func() error { return cmd.Process.Signal(os.Interrupt) }
+	cmd.WaitDelay = 2 * time.Second
+	setChildDeathSignal(cmd)
+	stdout, err := cmd.StdoutPipe()
+	if err != nil || cmd.Start() != nil {
+		cancel()
+		return nil
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		s.consumeDump(stdout)
+	}()
+	return func() {
+		cancel() // SIGINT via cmd.Cancel; SIGKILL after WaitDelay
+		<-done   // the decoder must drain the pipe before Wait closes it
+		_ = cmd.Wait()
+	}
+}
+
 func (s *BLEScanner) Run(ctx context.Context) {
 	for ctx.Err() == nil {
 		_ = exec.CommandContext(ctx, "hciconfig", s.Iface, "up").Run()
 		s.disableScan(ctx)
+		// hcidump first so no advert is missed once scanning starts.
+		stopDump := s.startDump(ctx)
 		cmd := exec.CommandContext(ctx, "hcitool", leScanArgs(s.Iface)...)
 		// SIGINT lets hcitool disable scanning itself before Go force-kills.
 		cmd.Cancel = func() error { return cmd.Process.Signal(os.Interrupt) }
@@ -89,9 +97,16 @@ func (s *BLEScanner) Run(ctx context.Context) {
 		if stdout, err := cmd.StdoutPipe(); err == nil && cmd.Start() == nil {
 			s.consume(stdout)
 			_ = cmd.Wait()
+			if stopDump != nil {
+				stopDump()
+				stopDump = nil
+			}
 			stopCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 			s.disableScan(stopCtx)
 			cancel()
+		}
+		if stopDump != nil {
+			stopDump()
 		}
 		timer := time.NewTimer(s.RestartDelay)
 		select {
@@ -107,9 +122,14 @@ func (s *BLEScanner) consume(r io.Reader) {
 	sc := bufio.NewScanner(r)
 	for sc.Scan() {
 		if addr, ok := ParseLEScanLine(sc.Text()); ok {
-			s.Counter.Observe(addr, s.Now())
+			s.Tracker.ObserveAddr(addr, s.Now())
 		}
 	}
+}
+
+// consumeDump decodes a btsnoop stream into the tracker until EOF or error.
+func (s *BLEScanner) consumeDump(r io.Reader) {
+	_ = ReadBTSnoop(r, func(a Advert) { s.Tracker.Observe(a, s.Now()) })
 }
 
 // BluetoothAvailable reports whether hcitool and the adapter both exist.

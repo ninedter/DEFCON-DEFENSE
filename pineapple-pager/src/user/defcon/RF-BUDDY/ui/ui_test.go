@@ -10,14 +10,18 @@ import (
 )
 
 type recordingController struct {
-	bands   []Band
-	locks   []Channel
-	unlocks int
+	bands    []Band
+	locks    []Channel
+	unlocks  int
+	tracked  []string
+	untracks int
 }
 
-func (c *recordingController) SetBand(b Band)  { c.bands = append(c.bands, b) }
-func (c *recordingController) Lock(ch Channel) { c.locks = append(c.locks, ch) }
-func (c *recordingController) Unlock()         { c.unlocks++ }
+func (c *recordingController) SetBand(b Band)      { c.bands = append(c.bands, b) }
+func (c *recordingController) Lock(ch Channel)     { c.locks = append(c.locks, ch) }
+func (c *recordingController) Unlock()             { c.unlocks++ }
+func (c *recordingController) TrackBT(addr string) { c.tracked = append(c.tracked, addr) }
+func (c *recordingController) UntrackBT()          { c.untracks++ }
 
 type recordingMarks struct {
 	marks []Mark
