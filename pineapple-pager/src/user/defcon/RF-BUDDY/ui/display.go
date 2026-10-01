@@ -254,6 +254,12 @@ func readButtonDevice(ctx context.Context, inputDevice string, out chan<- string
 		return err
 	}
 	defer f.Close()
+	// Best effort: keep presses from reaching the stock UI while we run.
+	// SyscallConn avoids Fd(), which would force the descriptor into blocking
+	// mode and stop Close from unblocking the read on shutdown.
+	if rc, err := f.SyscallConn(); err == nil {
+		_ = rc.Control(func(fd uintptr) { _ = grabInput(int(fd)) })
+	}
 
 	done := make(chan struct{})
 	defer close(done)
