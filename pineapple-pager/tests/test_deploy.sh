@@ -142,10 +142,10 @@ echo keep > "$BR2/defcon-defense-manual/RF-BUDDY/payload.sh"
 out="$(FAKE_SSH_EXEC=1 PATH="$STUBS:$PATH" PAGER_PAYLOAD_ROOT="$PR" PAGER_BACKUP_ROOT="$BR2" \
   PAGER_LIBRARY="$LIB" PAGER_SSH="$FAKE_SSH" bash "$ROOT/deploy.sh" --skip-build)"
 assert_rc "$?" "0" "deploy with old backups succeeds"
-assert_eq "$(find "$BR2" -mindepth 2 -maxdepth 2 -name RF-BUDDY -path "$BR2/2*" | wc -l | tr -d ' ')" "3" \
-  "only the newest 3 RF-BUDDY deploy backups are kept"
-[ ! -e "$BR2/20250101-000003/RF-BUDDY" ] && [ -d "$BR2/20250101-000004/RF-BUDDY" ] && [ -d "$BR2/20250101-000005/RF-BUDDY" ]
-assert_rc "$?" "0" "the oldest RF-BUDDY backups are the ones pruned"
+assert_eq "$(find "$BR2" -mindepth 2 -maxdepth 2 -name RF-BUDDY -path "$BR2/2*" | wc -l | tr -d ' ')" "1" \
+  "only the newest RF-BUDDY deploy backup is kept"
+[ ! -e "$BR2/20250101-000005/RF-BUDDY" ] && [ -n "$(find "$BR2" -maxdepth 2 -path "$BR2/2*/RF-BUDDY" ! -path "$BR2/20250101-*")" ]
+assert_rc "$?" "0" "the backup from this deploy is the one kept"
 [ ! -e "$BR2/20250101-000002" ]; assert_rc "$?" "0" "emptied backup folders are removed"
 [ -f "$BR2/20250101-000001/DEFCON-DEFENSE/payload.sh" ]
 assert_rc "$?" "0" "pruning RF-BUDDY never touches DEFCON-DEFENSE backups"

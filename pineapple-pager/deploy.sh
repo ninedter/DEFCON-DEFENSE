@@ -15,7 +15,7 @@ REMOTE_ROOT="${PAGER_PAYLOAD_ROOT:-/mmc/root/payloads}"
 LIBRARY="${PAGER_LIBRARY:-$HERE/library}"
 BACKUP_ROOT="${PAGER_BACKUP_ROOT:-/mmc/root/payload-backups}"
 SSH="${PAGER_SSH:-ssh}"
-KEEP="${PAGER_BACKUP_KEEP:-3}"
+KEEP="${PAGER_BACKUP_KEEP:-1}"
 case "$KEEP" in ''|*[!0-9]*) echo "ERROR: PAGER_BACKUP_KEEP must be a number" >&2; exit 2 ;; esac
 DRY_RUN=0
 SKIP_BUILD=0
