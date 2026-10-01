@@ -26,13 +26,18 @@ type btdbTables struct {
 	oui        map[uint32]string
 }
 
-var (
-	btdbOnce sync.Once
-	btdbData *btdbTables
-)
+// btdbLazy loads the tables exactly once, on first use, from any goroutine.
+type btdbLazy struct {
+	once sync.Once
+	data *btdbTables
+}
 
-func btdbLoad() *btdbTables {
-	btdbOnce.Do(func() {
+var btdbDefault btdbLazy
+
+func btdbLoad() *btdbTables { return btdbDefault.get() }
+
+func (l *btdbLazy) get() *btdbTables {
+	l.once.Do(func() {
 		t := &btdbTables{
 			companies:  map[int]btNames{},
 			members:    map[int]btNames{},
@@ -65,9 +70,9 @@ func btdbLoad() *btdbTables {
 				t.oui[uint32(v)] = f[1]
 			}
 		})
-		btdbData = t
+		l.data = t
 	})
-	return btdbData
+	return l.data
 }
 
 func btdbHex(s string) (int, bool) {
@@ -118,8 +123,12 @@ func ServiceName(uuid16 int) (string, bool) {
 }
 
 // AppearanceName resolves a GAP appearance value: the exact value first, then
-// its category (value with the 6 subcategory bits cleared).
+// its category (value with the 6 subcategory bits cleared). Category 0
+// ("UNKNOWN") carries no information and reports ok=false.
 func AppearanceName(v int) (string, bool) {
+	if v < 0 || v&^0x3F == 0 {
+		return "", false
+	}
 	t := btdbLoad()
 	if n, ok := t.appearance[v]; ok {
 		return n, true

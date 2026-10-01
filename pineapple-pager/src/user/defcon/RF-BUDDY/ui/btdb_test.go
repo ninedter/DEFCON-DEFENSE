@@ -3,6 +3,7 @@ package main
 import (
 	"io/fs"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -48,6 +49,11 @@ func TestAppearanceName(t *testing.T) {
 	// Unknown subcategory falls back to the category.
 	if n, ok := AppearanceName(0x0040 | 0x3F); !ok || n != "PHONE" {
 		t.Errorf("category fallback = %q,%v", n, ok)
+	}
+	for _, v := range []int{0, 0x0001, 0x003F, -1} {
+		if n, ok := AppearanceName(v); ok {
+			t.Errorf("AppearanceName(%#x) = %q, want ok=false for category 0", v, n)
+		}
 	}
 	if _, ok := AppearanceName(0xFFFF); ok {
 		t.Error("0xFFFF should be unknown")
@@ -97,4 +103,27 @@ func TestBtdbSizeAndASCII(t *testing.T) {
 	if len(tb.companies) < 3000 || len(tb.oui) < 20000 {
 		t.Errorf("tables look truncated: %d companies, %d oui", len(tb.companies), len(tb.oui))
 	}
+}
+
+// TestBTDBConcurrentFirstUse hammers a fresh lazy loader (so the first-load
+// path really runs under the race detector) and the package-level lookups.
+func TestBTDBConcurrentFirstUse(t *testing.T) {
+	l := &btdbLazy{}
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if tb := l.get(); tb == nil || tb.companies[0x004C].brand != "APPLE" || tb.oui[0xF8FFC2] != "APPLE" {
+				t.Error("fresh loader returned incomplete tables")
+			}
+			if b, _, ok := CompanyBrand(0x004C); !ok || b != "APPLE" {
+				t.Error("CompanyBrand")
+			}
+			if b, ok := OUIBrand("F8:FF:C2:00:00:01"); !ok || b != "APPLE" {
+				t.Error("OUIBrand")
+			}
+		}()
+	}
+	wg.Wait()
 }
