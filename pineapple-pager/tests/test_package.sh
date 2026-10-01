@@ -26,7 +26,7 @@ assert_rc "$?" "0" "archive contents match manifest"
 
 tar -tzf "$ARCHIVE" | grep -q '^\./user/defcon/RF-BUDDY/rf-buddy-ui$'
 assert_rc "$?" "0" "archive ships RF-BUDDY under user/defcon"
-tar -tzf "$ARCHIVE" | grep -q '^\./user/defcon/DEFCON-DEFENSE/defcon-ui$'
-assert_rc "$?" "0" "archive ships DEFCON-DEFENSE under user/defcon"
+tar -tzf "$ARCHIVE" | grep -q '^\./user/general/DEFCON_DEFENSE/defcon-ui$'
+assert_rc "$?" "0" "archive ships DEFCON_DEFENSE under user/general"
 
 exit "$FAIL"

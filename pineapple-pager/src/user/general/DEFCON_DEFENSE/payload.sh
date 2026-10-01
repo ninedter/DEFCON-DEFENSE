@@ -8,14 +8,14 @@
 PAYLOAD_ROOT="/root/payloads"
 # The Pager payload runner may execute payload.sh from a temporary directory,
 # so prefer the stable installed payload path for colocated support files.
-INSTALLED_DIR="${DEFCON_DEFENSE_INSTALL_DIR:-$PAYLOAD_ROOT/user/defcon/DEFCON-DEFENSE}"
+INSTALLED_DIR="${DEFCON_DEFENSE_INSTALL_DIR:-$PAYLOAD_ROOT/user/general/DEFCON_DEFENSE}"
 SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 if [ -f "$INSTALLED_DIR/rf_guard_lib.sh" ]; then
   DIR="$INSTALLED_DIR"
 elif [ -f "$SOURCE_DIR/rf_guard_lib.sh" ]; then
   DIR="$SOURCE_DIR"
-elif [ -f "/mmc/root/payloads/user/defcon/DEFCON-DEFENSE/rf_guard_lib.sh" ]; then
-  DIR="/mmc/root/payloads/user/defcon/DEFCON-DEFENSE"
+elif [ -f "/mmc/root/payloads/user/general/DEFCON_DEFENSE/rf_guard_lib.sh" ]; then
+  DIR="/mmc/root/payloads/user/general/DEFCON_DEFENSE"
 else
   DIR="$SOURCE_DIR"
 fi

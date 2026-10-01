@@ -24,20 +24,17 @@ cp "$LIB" "$OUT/alerts/pineapple_client_connected/defcon_honeypot/pager_alert_li
 cp "$PCAP_LIB" "$OUT/alerts/deauth_flood_detected/defcon_sentry/pcap_evidence_lib.sh"
 
 # Visible on-device entry point for status and launching the curated tools.
-cp -R "$HERE/src/user/defcon/DEFCON-DEFENSE" "$OUT/user/defcon/"
-cp "$PCAP_LIB" "$OUT/user/defcon/DEFCON-DEFENSE/pcap_evidence_lib.sh"
+cp -R "$HERE/src/user/general/DEFCON_DEFENSE" "$OUT/user/general/"
+cp "$PCAP_LIB" "$OUT/user/general/DEFCON_DEFENSE/pcap_evidence_lib.sh"
 
 # Compile the full-screen 480x222 Pager application for the device's MIPS32
 # soft-float userspace. Only the binary is shipped to the Pager.
-bash "$HERE/src/user/defcon/DEFCON-DEFENSE/ui/build.sh" \
-  "$OUT/user/defcon/DEFCON-DEFENSE/defcon-ui"
-rm -rf "$OUT/user/defcon/DEFCON-DEFENSE/ui"
+bash "$HERE/src/user/general/DEFCON_DEFENSE/ui/build.sh" \
+  "$OUT/user/general/DEFCON_DEFENSE/defcon-ui"
+rm -rf "$OUT/user/general/DEFCON_DEFENSE/ui"
 
 # Office interference finder: a separate payload with its own native UI.
-# It reuses the DEFCON-DEFENSE Virtual Pager bridge (served on port 1472).
 cp -R "$HERE/src/user/defcon/RF-BUDDY" "$OUT/user/defcon/"
-cp "$HERE/src/user/defcon/DEFCON-DEFENSE/virtual-pager-bridge.js" \
-  "$OUT/user/defcon/RF-BUDDY/virtual-pager-bridge.js"
 bash "$HERE/src/user/defcon/RF-BUDDY/ui/build.sh" \
   "$OUT/user/defcon/RF-BUDDY/rf-buddy-ui"
 rm -rf "$OUT/user/defcon/RF-BUDDY/ui"
@@ -60,7 +57,7 @@ done
 
 # Deterministic 644 regardless of the builder's umask (device payload convention).
 find "$OUT" -type f -exec chmod 644 {} +
-chmod 755 "$OUT/user/defcon/DEFCON-DEFENSE/defcon-ui"
+chmod 755 "$OUT/user/general/DEFCON_DEFENSE/defcon-ui"
 chmod 755 "$OUT/user/defcon/RF-BUDDY/rf-buddy-ui"
 
 # Syntax-check the whole output
