@@ -79,52 +79,63 @@ func previewBTSnapshot(now time.Time) Snapshot {
 		rssi             int
 		adv              float64
 		tx               int
+		model, beacon    string
+		makerFull, addr  string
+		svc              []string
+		public           bool
 	}
 	// a realistic office mix: lots of Apple, a Nanoleaf strip, Microsoft, randoms
 	devs := []dev{
-		{"APPLE", "AIRPODS", "", -42, 9.8, 0},
-		{"APPLE", "FIND MY", "", -48, 2.1, 0},
-		{"NANOLEAF", "OTHER", "NANOLEAF STRIP FCE", -55, 4.2, 12},
-		{"APPLE", "NEARBY", "", -57, 3.0, 0},
-		{"APPLE", "FIND MY", "", -59, 1.8, 0},
-		{"MICROSOFT", "SWIFT PAIR", "", -63, 2.1, 0},
-		{"APPLE", "AIRPLAY", "", -64, 1.4, 0},
-		{"APPLE", "FIND MY", "", -66, 1.6, 0},
-		{"UNKNOWN", "OTHER", "", -67, 1.5, 0},
-		{"APPLE", "HANDOFF", "", -68, 1.1, 0},
-		{"APPLE", "FIND MY", "", -70, 1.2, 0},
-		{"APPLE", "NEARBY", "", -71, 0.9, 0},
-		{"SAMSUNG", "WATCH", "GALAXY WATCH5 PRO (LIVING ROOM)", -72, 3.3, 8},
-		{"APPLE", "FIND MY", "", -73, 1.0, 0},
-		{"GOOGLE", "FAST PAIR", "", -75, 1.1, 0},
-		{"APPLE", "FIND MY", "", -76, 0.9, 0},
-		{"APPLE", "NEARBY", "", -77, 0.8, 0},
-		{"MICROSOFT", "WINDOWS", "", -78, 0.7, 0},
-		{"APPLE", "FIND MY", "", -79, 0.8, 0},
-		{"UNKNOWN", "EDDYSTONE", "", -80, 0.6, 0},
-		{"APPLE", "FIND MY", "", -81, 0.7, 0},
-		{"APPLE", "NEARBY", "", -82, 0.6, 0},
-		{"TILE", "TRACKER", "", -83, 0.5, 0},
-		{"APPLE", "FIND MY", "", -84, 0.6, 0},
-		{"GARMIN", "OTHER", "", -85, 0.7, 0},
-		{"APPLE", "NEARBY", "", -86, 0.5, 0},
-		{"MICROSOFT", "SWIFT PAIR", "", -87, 0.5, 0},
-		{"APPLE", "FIND MY", "", -88, 0.5, 0},
-		{"UNKNOWN", "OTHER", "", -89, 0.4, 0},
-		{"XIAOMI", "OTHER", "", -90, 0.6, 0},
-		{"APPLE", "NEARBY", "", -91, 0.4, 0},
-		{"MICROSOFT", "WINDOWS", "", -92, 0.4, 0},
-		{"UNKNOWN", "OTHER", "", -93, 0.3, 0},
-		{"APPLE", "AIRPLAY", "", -94, 0.3, 0},
-		{"ESPRESSIF", "OTHER", "", -95, 0.2, 0},
-		{"APPLE", "FIND MY", "", -100, 0.2, 0},
-		{"UNKNOWN", "OTHER", "", -100, 0.2, 0},
+		{"APPLE", "AIRPODS", "", -42, 9.8, 0, "AIRPODS PRO 2", "", "APPLE", "", nil, false},
+		{"APPLE", "FIND MY", "", -48, 2.1, 0, "", "", "", "", nil, false},
+		{"NANOLEAF", "LIGHT", "NANOLEAF STRIP FCE", -55, 4.2, 12, "", "", "", "", nil, false},
+		{"APPLE", "NEARBY", "", -57, 3.0, 0, "", "", "", "", nil, false},
+		{"APPLE", "FIND MY", "", -59, 1.8, 0, "", "", "", "", nil, false},
+		{"MICROSOFT", "SWIFT PAIR", "", -63, 2.1, 0, "", "", "", "", nil, false},
+		{"APPLE", "AIRPLAY", "", -64, 1.4, 0, "", "", "", "", nil, false},
+		{"APPLE", "FIND MY", "", -66, 1.6, 0, "", "", "", "", nil, false},
+		{"UNKNOWN", "OTHER", "", -67, 1.5, 0, "", "", "", "", nil, false},
+		{"APPLE", "HANDOFF", "", -68, 1.1, 0, "", "", "", "", nil, false},
+		{"APPLE", "FIND MY", "", -70, 1.2, 0, "", "", "", "", nil, false},
+		{"APPLE", "NEARBY", "", -71, 0.9, 0, "", "", "", "", nil, false},
+		{"SAMSUNG", "WATCH", "GALAXY WATCH5 PRO (LIVING ROOM)", -72, 3.3, 8, "", "", "", "", nil, false},
+		{"APPLE", "FIND MY", "", -73, 1.0, 0, "", "", "", "", nil, false},
+		{"GOOGLE", "FAST PAIR", "", -75, 1.1, 0, "", "", "", "", nil, false},
+		{"APPLE", "FIND MY", "", -76, 0.9, 0, "", "", "", "", nil, false},
+		{"APPLE", "NEARBY", "", -77, 0.8, 0, "", "", "", "", nil, false},
+		{"MICROSOFT", "WINDOWS", "", -78, 0.7, 0, "WINDOWS LAPTOP", "", "MICROSOFT", "", nil, false},
+		{"APPLE", "FIND MY", "", -79, 0.8, 0, "", "", "", "", nil, false},
+		{"ESPRESSIF", "IBEACON", "", -80, 0.6, 0, "", "IBEACON 100/7", "ESPRESSIF", "24:6F:28:5A:C3:19", nil, true},
+		{"APPLE", "FIND MY", "", -81, 0.7, 0, "", "", "", "", nil, false},
+		{"APPLE", "NEARBY", "", -82, 0.6, 0, "", "", "", "", nil, false},
+		{"TILE", "TRACKER", "", -83, 0.5, 0, "", "", "", "", nil, false},
+		{"APPLE", "FIND MY", "", -84, 0.6, 0, "", "", "", "", nil, false},
+		{"GARMIN", "WATCH", "", -85, 0.7, 0, "", "", "", "", nil, false},
+		{"APPLE", "NEARBY", "", -86, 0.5, 0, "", "", "", "", nil, false},
+		{"MICROSOFT", "SWIFT PAIR", "", -87, 0.5, 0, "", "", "", "", nil, false},
+		{"APPLE", "FIND MY", "", -88, 0.5, 0, "", "", "", "", nil, false},
+		{"UNKNOWN", "OTHER", "", -89, 0.4, 0, "", "", "", "", nil, false},
+		{"XIAOMI", "FITNESS", "", -90, 0.6, 0, "", "", "", "", nil, false},
+		{"APPLE", "NEARBY", "", -91, 0.4, 0, "", "", "", "", nil, false},
+		{"MICROSOFT", "WINDOWS", "", -92, 0.4, 0, "", "", "", "", nil, false},
+		{"UNKNOWN", "OTHER", "", -93, 0.3, 0, "", "", "", "", nil, false},
+		{"APPLE", "AIRPLAY", "", -94, 0.3, 0, "", "", "", "", nil, false},
+		{"ESPRESSIF", "OTHER", "", -95, 0.2, 0, "", "", "", "", nil, false},
+		{"APPLE", "FIND MY", "", -100, 0.2, 0, "", "", "", "", nil, false},
+		{"UNKNOWN", "OTHER", "", -100, 0.2, 0, "", "", "", "", nil, false},
+		{"SAMSUNG", "PHONE", "GALAXY S23", -61, 2.4, 8, "", "", "SAMSUNG ELECTRONICS", "", nil, false},
+		{"BOSE", "AUDIO", "BOSE QC35 II", -66, 1.9, 0, "", "", "BOSE", "", []string{"LE AUDIO"}, false},
+		{"HARMAN", "SPEAKER", "JBL FLIP 5", -70, 1.7, 0, "", "", "HARMAN", "", nil, false},
+		{"POLAR", "HEART RATE", "POLAR H10 A1B2C3", -72, 1.0, 0, "", "", "POLAR", "", []string{"HEART RATE", "BATTERY"}, true},
+		{"REALTEK", "OTHER", "", -84, 0.6, 0, "", "", "REALTEK", "", nil, true},
+		{"ID B5B5", "OTHER", "", -88, 0.5, 0, "", "", "B5 LABS WIRELESS", "D1:7A:3C:09:E2:5B", nil, false},
 	}
 	for i, d := range devs {
 		b := BLEDevice{
 			Addr:   fmt.Sprintf("%02X:%02X:%02X:%02X:%02X:%02X", 0x40+i, 0x63^i, 0xB5-i, 0x11*(i%9), 0x20+3*i, 0xA0+i),
-			Random: d.brand == "APPLE" || d.brand == "UNKNOWN",
+			Random: !d.public && d.brand != "BOSE" && d.brand != "HARMAN",
 			Brand:  d.brand, Type: d.typ, Name: d.name, Maker: d.brand, Kind: d.typ,
+			Model: d.model, BeaconInfo: d.beacon, MakerFull: d.makerFull, Services: d.svc,
 			RSSI: d.rssi, Peak: min(-30, d.rssi+6+i%5), AdvPerSec: d.adv, TxPower: d.tx, HasTx: d.tx != 0,
 			LastSeen:  now.Add(-time.Duration(i%4) * time.Second),
 			FirstSeen: now.Add(-time.Duration(60+i*47) * time.Second),
@@ -132,9 +143,16 @@ func previewBTSnapshot(now time.Time) Snapshot {
 		if d.rssi <= -100 {
 			b.Peak = -100
 		}
+		if d.brand == "UNKNOWN" { // non-resolvable randoms
+			b.Addr = fmt.Sprintf("%02X%s", 0x10+i, b.Addr[2:])
+		}
+		if d.addr != "" {
+			b.Addr = d.addr
+		}
 		if d.brand == "UNKNOWN" {
 			b.Maker = ""
 		}
+		b.AddrKind = bleAddrKind(b.Addr, b.Random)
 		b.Label = bleLabel(b)
 		s.BT = append(s.BT, b)
 	}
@@ -194,6 +212,17 @@ func previewCases(now time.Time) []previewCase {
 	trackAddr := btSnap.BT[2].Addr
 	findMy := DevicesOf(btSnap.BT, "APPLE", "FIND MY")
 	findMyLast := findMy[len(findMy)-2].Addr
+	find := func(pred func(BLEDevice) bool) string {
+		for _, d := range btSnap.BT {
+			if pred(d) {
+				return d.Addr
+			}
+		}
+		return ""
+	}
+	modelAddr := find(func(d BLEDevice) bool { return d.Model == "AIRPODS PRO 2" })
+	beaconAddr := find(func(d BLEDevice) bool { return d.BeaconInfo != "" })
+	idAddr := find(func(d BLEDevice) bool { return d.Brand == "ID B5B5" })
 	return []previewCase{
 		{"01-probe-checking.png", normal, mk(okCaps, false, screenProbe, Band24, "")},
 		{"02-probe-result.png", normal, mk(noBT, true, screenProbe, Band24, "")},
@@ -204,15 +233,19 @@ func previewCases(now time.Time) []previewCase {
 		{"07-fatal.png", normal, mk(fatal, true, screenFatal, Band24, "")},
 		{"08-stress-overview.png", stress, mk(okCaps, true, screenOverview, Band5, "")},
 		{"09-stress-lock.png", stress, mk(okCaps, true, screenLock, Band24, "MARK 12 @ 12:42 - SCORE 100 WITH A VERY LONG OPERATOR NOTE")},
-		{"10-bt-brands.png", btSnap, mkBT(btLevelBrands, "UNKNOWN", "", "", true)},
+		{"10-bt-brands.png", btSnap, mkBT(btLevelBrands, "SAMSUNG", "", "", true)},
 		{"11-bt-types-apple.png", btSnap, mkBT(btLevelTypes, "APPLE", "FIND MY", "", true)},
 		{"12-bt-devices-find-my.png", btSnap, mkBT(btLevelDevices, "APPLE", "FIND MY", findMyLast, true)},
 		{"13-bt-device-long-name.png", btSnap, mkBT(btLevelDevices, "SAMSUNG", "WATCH", "", true)},
 		{"14-bt-types-empty.png", btSnap, mkBT(btLevelTypes, "GONE BRAND", "", "", true)},
 		{"15-bt-brands-empty.png", btEmpty, mkBT(btLevelBrands, "", "", "", true)},
 		{"16-bt-na.png", btNA, mkBT(btLevelBrands, "", "", "", true)},
-		{"17-bt-track.png", previewBTTrack(now, false), mkBT(btLevelTrack, "NANOLEAF", "OTHER", trackAddr, true)},
-		{"18-bt-track-lost.png", previewBTTrack(now, true), mkBT(btLevelTrack, "NANOLEAF", "OTHER", trackAddr, false)},
+		{"17-bt-track.png", previewBTTrack(now, false), mkBT(btLevelTrack, "NANOLEAF", "LIGHT", trackAddr, true)},
+		{"18-bt-track-lost.png", previewBTTrack(now, true), mkBT(btLevelTrack, "NANOLEAF", "LIGHT", trackAddr, false)},
+		{"19-bt-device-model-private.png", btSnap, mkBT(btLevelDevices, "APPLE", "AIRPODS", modelAddr, true)},
+		{"20-bt-device-beacon-public.png", btSnap, mkBT(btLevelDevices, "ESPRESSIF", "IBEACON", beaconAddr, true)},
+		{"21-bt-device-id-brand-static.png", btSnap, mkBT(btLevelDevices, "ID B5B5", "OTHER", idAddr, true)},
+		{"22-bt-types-services.png", btSnap, mkBT(btLevelTypes, "POLAR", "HEART RATE", "", true)},
 	}
 }
 

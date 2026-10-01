@@ -219,8 +219,8 @@ func TestRenderPreviewsWritesEveryState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 18 {
-		t.Fatalf("previews = %d, want 18", len(entries))
+	if len(entries) != 22 {
+		t.Fatalf("previews = %d, want 22", len(entries))
 	}
 	if _, err := os.Stat(filepath.Join(dir, "05-lock.png")); err != nil {
 		t.Fatal(err)

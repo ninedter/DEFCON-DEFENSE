@@ -109,7 +109,9 @@ devices: A drills from BRANDS (Apple, Microsoft, …) to their TYPES (Find My,
 Nearby, AirPods, …) to the DEVICES themselves, and B steps back. On a device, A
 starts TRACK: a proximity meter (VERY CLOSE / CLOSE / NEAR / FAR) whose tick
 speeds up as you walk toward it — handy for finding the earbud case or beacon
-that sits on a busy desk. Details and button tables are in
+that sits on a busy desk. Devices are identified offline from an embedded
+Bluetooth SIG and IEEE OUI database (maker, kind and model are shown per device,
+and the address type tells whether the address can be trusted). Details and button tables are in
 `src/user/defcon/RF-BUDDY/README.md`.
 
 Open `http://172.16.52.1:1474` in a browser for a live copy of the screen with
