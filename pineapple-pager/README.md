@@ -9,7 +9,7 @@ a repeated same-offense**, stay quiet on ambient DEF CON noise.
 | Payload | Type | Warns you when… |
 |---|---|---|
 | `user/defcon/DEFCON-DEFENSE` | on-demand | runs a dedicated 480x222 full-screen Pager application with the designed general, threat-detail, and PCAP-evidence interfaces; it supplies live passive 2.4/5 GHz Recon, background trusted/watched-network correlation, bounded investigation capture, evidence verification, and later download through Virtual Pager |
-| `user/defcon/RF-BUDDY` | on-demand | separate, standalone full-screen 2.4/5 GHz interference finder (also viewable at `http://172.16.52.1:1474`): a live channel overview, a 1-second lock-on meter with a buzzer tick, and a survey log, so you can walk an office and find where Wi-Fi and Bluetooth suffer and why (interference, congestion, overlap, Bluetooth density, weak coverage). Recon keeps running, locked to one channel at a time |
+| `user/defcon/RF-BUDDY` | on-demand | separate, standalone full-screen 2.4/5 GHz interference finder (also viewable at `http://172.16.52.1:1474`): a live channel overview, a 1-second lock-on meter with a buzzer tick, a Bluetooth LE browser (brand → type → device) with a walk-around TRACK meter, and a survey log, so you can walk an office and find where Wi-Fi and Bluetooth suffer and why (interference, congestion, overlap, Bluetooth density, weak coverage). Recon keeps running, locked to one channel at a time |
 | `alerts/deauth_flood_detected/defcon_sentry` | auto (custom) | the **same** attacker sustains a deauth/disassoc flood (3 hits/2 min, 5 min cooldown; watched MACs escalate instantly), then immediately starts a bounded passive PCAP when storage and concurrency guards allow |
 | `alerts/pineapple_client_connected/defcon_honeypot` | auto (custom) | a client joins **your decoy AP** (first sighting per client, dedup reconnects; flags randomized/private MACs — most modern phones use these, so it's expected, not alarming) |
 | `user/general/PORT_ALERT` | on-demand | someone port-scans the Pager (auto-hardens firewall 60s) |
@@ -39,6 +39,9 @@ PMKID attacks, handshake capture/crack, captive portals, PineAP karma/rogue-AP.
    never touches the other. Any previous copy is moved to
    `/mmc/root/payload-backups/<timestamp>/<name>`; a DEFCON Defense deploy also
    moves an old `user/general/DEFCON_DEFENSE` there so the menu shows one copy.
+   Only the newest deploy backup of each payload is kept (set
+   `PAGER_BACKUP_KEEP=n` to keep more); folders you create yourself in that
+   directory are never touched.
    The script registers the `defcon` folder in the Payloads menu
    (`/etc/config/payloads`). Use `--dry-run` to preview. A firmware update may
    reset the menu list; re-run the deploy afterwards. To install over USB
@@ -101,8 +104,17 @@ cannot report busy time or noise floor, so RF-BUDDY scores channels from Wi-Fi
 airtime, retries, AP crowding, and Bluetooth density; the Bluetooth scan is
 passive.
 
+Press UP/DOWN until the **BT** tab is highlighted to browse nearby Bluetooth LE
+devices: A drills from BRANDS (Apple, Microsoft, …) to their TYPES (Find My,
+Nearby, AirPods, …) to the DEVICES themselves, and B steps back. On a device, A
+starts TRACK: a proximity meter (VERY CLOSE / CLOSE / NEAR / FAR) whose tick
+speeds up as you walk toward it — handy for finding the earbud case or beacon
+that sits on a busy desk. Details and button tables are in
+`src/user/defcon/RF-BUDDY/README.md`.
+
 Open `http://172.16.52.1:1474` in a browser for a live copy of the screen with
-buttons. While RF-BUDDY runs, the stock Pager menu and the stock Virtual Pager
+buttons. Like DEFCON Defense's screen server, it listens only on the Pager's USB
+management address, never on Wi-Fi. While RF-BUDDY runs, the stock Pager menu and the stock Virtual Pager
 (`:1471`) are paused; they come back when you press B. Recon keeps running,
 locked to one channel at a time.
 
