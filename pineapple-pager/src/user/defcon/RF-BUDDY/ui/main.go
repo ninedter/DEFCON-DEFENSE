@@ -137,12 +137,12 @@ func run(o options) error {
 	}
 	defer logger.Close()
 
-	capturer, err := OpenCapturer(o.iface)
-	if err != nil {
-		capturer = nil
-	}
-	if capturer != nil {
-		defer capturer.Close()
+	var capturer Capturer
+	if opened, err := OpenCapturer(o.iface); err != nil {
+		capturer = failedCapturer{err: err}
+	} else if opened != nil {
+		capturer = opened
+		defer opened.Close()
 	}
 	radio := NewPagerRadio(o.iface, execRunner, capturer, 30*time.Millisecond)
 	// Always hand the channel back to Recon, even after a fatal probe.
@@ -230,7 +230,10 @@ func run(o options) error {
 		case caps := <-probeDone:
 			view.SetProbe(caps)
 			_ = logger.WriteSession(sessionText(o, caps, started))
-			if !caps.Fatal() {
+			if caps.Fatal() {
+				// Nothing to measure: hand the channel back right away.
+				_ = radio.Release(ctx)
+			} else {
 				engine.SetCapabilities(caps)
 				if caps.Bluetooth {
 					scanner := &BLEScanner{Iface: o.btIface, Counter: ble, Now: time.Now, RestartDelay: 2 * time.Second}

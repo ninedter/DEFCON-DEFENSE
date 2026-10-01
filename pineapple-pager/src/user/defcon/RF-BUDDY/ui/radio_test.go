@@ -127,3 +127,12 @@ func TestOpenCapturerOnHostFailsCleanly(t *testing.T) {
 		t.Fatal("opening a missing interface must fail")
 	}
 }
+
+func TestFailedCapturerKeepsOpenError(t *testing.T) {
+	radio := NewPagerRadio("wlan1mon", func(context.Context, string, ...string) ([]byte, error) { return nil, nil },
+		failedCapturer{errors.New("operation not permitted")}, 0)
+	err := radio.Capture(context.Background(), time.Millisecond, func(Frame) {})
+	if err == nil || !strings.Contains(err.Error(), "operation not permitted") {
+		t.Fatalf("capture error = %v, want the open error", err)
+	}
+}

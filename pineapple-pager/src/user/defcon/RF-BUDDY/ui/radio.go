@@ -25,6 +25,16 @@ type Capturer interface {
 	Close() error
 }
 
+// failedCapturer stands in when the capture socket could not be opened, so the
+// probe reports the real open error instead of a generic one.
+type failedCapturer struct{ err error }
+
+func (f failedCapturer) Capture(context.Context, time.Duration, func([]byte)) error {
+	return fmt.Errorf("open capture: %w", f.err)
+}
+
+func (f failedCapturer) Close() error { return nil }
+
 var errCaptureUnavailable = errors.New("frame capture unavailable")
 
 // Radio is wlan1mon as the engine and probe see it.
