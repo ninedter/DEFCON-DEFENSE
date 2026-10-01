@@ -43,7 +43,16 @@ func Probe(ctx context.Context, d ProbeDeps) Capabilities {
 		return c
 	}
 	c.Tune = true
-	if err := d.Radio.Capture(ctx, d.CaptureWindow, func(Frame) {}); err != nil {
+	var err error
+	for attempt := 0; attempt < 3; attempt++ {
+		if attempt > 0 {
+			sleepCtx(ctx, 200*time.Millisecond)
+		}
+		if err = d.Radio.Capture(ctx, d.CaptureWindow, func(Frame) {}); err == nil {
+			break
+		}
+	}
+	if err != nil {
 		c.FatalReason = fmt.Sprintf("CANNOT CAPTURE FRAMES ON WLAN1MON (%v)", err)
 		return c
 	}

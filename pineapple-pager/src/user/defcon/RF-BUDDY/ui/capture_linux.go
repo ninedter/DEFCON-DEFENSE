@@ -57,7 +57,15 @@ func (p *packetCapturer) Capture(ctx context.Context, d time.Duration, fn func([
 		}
 		n, _, err := syscall.Recvfrom(p.fd, buf, 0)
 		if err != nil {
-			if errors.Is(err, syscall.EAGAIN) || errors.Is(err, syscall.EINTR) {
+			if isTransientRecvErr(err) {
+				if errors.Is(err, syscall.ENETDOWN) {
+					// One-shot sk_err after pineapd bounces the interface.
+					wait := 20 * time.Millisecond
+					if rem := time.Until(deadline); rem < wait {
+						wait = rem
+					}
+					sleepCtx(ctx, wait)
+				}
 				continue
 			}
 			return err

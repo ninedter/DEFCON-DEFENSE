@@ -48,3 +48,22 @@ func TestProbeFatalWhenChannelDrifts(t *testing.T) {
 		t.Fatalf("caps = %+v", c)
 	}
 }
+
+func TestProbeRetriesTransientCaptureFailure(t *testing.T) {
+	r := newFakeRadio(nil)
+	r.captureErr = errors.New("recvfrom: network is down")
+	r.captureFailures = 2
+	if c := probeWith(r, true); c.Fatal() || !c.Capture {
+		t.Fatalf("caps = %+v", c)
+	}
+}
+
+func TestProbeFatalAfterThreeCaptureFailures(t *testing.T) {
+	r := newFakeRadio(nil)
+	r.captureErr = errors.New("recvfrom: network is down")
+	r.captureFailures = 3
+	c := probeWith(r, true)
+	if !c.Fatal() || !strings.Contains(c.FatalReason, "CANNOT CAPTURE FRAMES ON WLAN1MON (recvfrom: network is down)") {
+		t.Fatalf("caps = %+v", c)
+	}
+}

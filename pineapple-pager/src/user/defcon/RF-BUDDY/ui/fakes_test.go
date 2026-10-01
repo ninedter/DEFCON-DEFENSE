@@ -38,10 +38,13 @@ type fakeRadio struct {
 	failTune   map[Channel]bool
 	frames     map[Channel][]Frame
 	captureErr error
-	reportFreq int
-	recon      []AP
-	reconN     int
-	releaseN   int
+	// captureFailures > 0 limits captureErr to the first N Capture calls.
+	captureFailures int
+	captureCalls    int
+	reportFreq      int
+	recon           []AP
+	reconN          int
+	releaseN        int
 }
 
 func newFakeRadio(clock *fakeClock) *fakeRadio {
@@ -102,6 +105,10 @@ func (r *fakeRadio) CurrentFreq(context.Context) (int, error) {
 func (r *fakeRadio) Capture(_ context.Context, d time.Duration, fn func(Frame)) error {
 	r.mu.Lock()
 	err := r.captureErr
+	r.captureCalls++
+	if r.captureFailures > 0 && r.captureCalls > r.captureFailures {
+		err = nil
+	}
 	frames := append([]Frame(nil), r.frames[r.current]...)
 	r.mu.Unlock()
 	if err != nil {
