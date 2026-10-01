@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"sync"
 	"time"
@@ -15,12 +16,14 @@ type EngineConfig struct {
 	DefaultRateKbps int
 	Thresholds      Thresholds
 	OfficeSSID      string
+	RetryBackoff    time.Duration
 }
 
 func DefaultEngineConfig() EngineConfig {
 	return EngineConfig{
 		Dwell: 250 * time.Millisecond, LockInterval: time.Second, SmoothTau: 3 * time.Second,
 		ReconRefresh: 30 * time.Second, DefaultRateKbps: defaultRateKbps, Thresholds: DefaultThresholds(),
+		RetryBackoff: time.Second,
 	}
 }
 
@@ -61,6 +64,7 @@ type Snapshot struct {
 	BTCount    int
 	HasBT      bool
 	LogPaused  bool
+	RadioError string
 }
 
 func (s Snapshot) Channels(b Band) []ChannelView {
@@ -96,6 +100,7 @@ type Engine struct {
 	cycle      int
 	revision   uint64
 	updates    chan struct{}
+	radioErr   string
 }
 
 func NewEngine(cfg EngineConfig, radio Radio, inv *Inventory, ble *BLECounter, sink SampleSink, now func() time.Time) *Engine {
@@ -225,13 +230,27 @@ func (e *Engine) measure(ctx context.Context, ch Channel, d time.Duration, mode 
 			return
 		}
 		e.mu.Lock()
-		e.skipped[ch] = true
+		if mode != ModeLock {
+			e.skipped[ch] = true
+		}
+		e.radioErr = fmt.Sprintf("CANNOT LOCK CH %d", ch.Number)
 		e.publishLocked()
 		e.mu.Unlock()
+		if mode == ModeLock {
+			sleepCtx(ctx, e.cfg.RetryBackoff)
+		}
 		return
 	}
 	stats := NewDwellStats(e.cfg.DefaultRateKbps)
 	if err := e.radio.Capture(ctx, d, stats.Add); err != nil || ctx.Err() != nil {
+		if ctx.Err() != nil {
+			return
+		}
+		e.mu.Lock()
+		e.radioErr = "FRAME CAPTURE FAILED"
+		e.publishLocked()
+		e.mu.Unlock()
+		sleepCtx(ctx, e.cfg.RetryBackoff)
 		return
 	}
 	res := stats.Result(d)
@@ -277,6 +296,7 @@ func (e *Engine) measure(ctx context.Context, ch Channel, d time.Duration, mode 
 	e.mu.Lock()
 	v := ChannelView{Channel: ch, Metrics: m, Raw: raw, Score: e.smoothLocked(ch, raw, now), Likely: likely, Measured: true, Updated: now, Top: top}
 	e.views[ch] = v
+	e.radioErr = ""
 	if mode == ModeLock && e.lock != nil && e.lock.Channel == ch {
 		e.updateLockLocked(v, now)
 	}
@@ -368,7 +388,7 @@ func (e *Engine) viewLocked(ch Channel) ChannelView {
 func (e *Engine) Snapshot() Snapshot {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	s := Snapshot{Revision: e.revision, Band: e.band}
+	s := Snapshot{Revision: e.revision, Band: e.band, RadioError: e.radioErr}
 	for _, ch := range Channels24() {
 		s.Channels24 = append(s.Channels24, e.viewLocked(ch))
 	}

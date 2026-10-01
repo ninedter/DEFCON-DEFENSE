@@ -14,6 +14,7 @@ func newTestEngine(r *fakeRadio, clock *fakeClock, sink SampleSink, office strin
 	cfg := DefaultEngineConfig()
 	cfg.Dwell = testDwell
 	cfg.OfficeSSID = office
+	cfg.RetryBackoff = time.Millisecond
 	e := NewEngine(cfg, r, NewInventory(nil), NewBLECounter(30*time.Second), sink, clock.Now)
 	e.SetCapabilities(Capabilities{Tune: true, Capture: true})
 	return e
@@ -187,5 +188,52 @@ func TestEngineCaptureErrorLeavesChannelUnmeasured(t *testing.T) {
 	steps(e, 1)
 	if v := e.Snapshot().Channels24[0]; v.Measured || v.Skipped {
 		t.Fatalf("view = %+v", v)
+	}
+}
+
+func TestEngineCaptureErrorBacksOffAndSurfacesError(t *testing.T) {
+	clock := newFakeClock()
+	r := newFakeRadio(clock)
+	r.captureErr = errors.New("recvfrom: network is down")
+	e := newTestEngine(r, clock, nil, "")
+	e.cfg.RetryBackoff = 30 * time.Millisecond
+	start := time.Now()
+	steps(e, 1)
+	if el := time.Since(start); el < 30*time.Millisecond {
+		t.Fatalf("Step returned after %v, want >= 30ms backoff", el)
+	}
+	if got := e.Snapshot().RadioError; got != "FRAME CAPTURE FAILED" {
+		t.Fatalf("RadioError = %q", got)
+	}
+	r.captureErr = nil
+	steps(e, 1)
+	if got := e.Snapshot().RadioError; got != "" {
+		t.Fatalf("RadioError after recovery = %q", got)
+	}
+}
+
+func TestEngineLockedChannelTuneFailureBacksOffWithoutSkipping(t *testing.T) {
+	clock := newFakeClock()
+	r := newFakeRadio(clock)
+	ch := Channel{Band24, 6}
+	r.failTune[ch] = true
+	e := newTestEngine(r, clock, nil, "")
+	e.cfg.RetryBackoff = 30 * time.Millisecond
+	e.Lock(ch)
+	start := time.Now()
+	steps(e, 1)
+	if el := time.Since(start); el < 30*time.Millisecond {
+		t.Fatalf("Step returned after %v, want >= 30ms backoff", el)
+	}
+	s := e.Snapshot()
+	if s.RadioError != "CANNOT LOCK CH 6" {
+		t.Fatalf("RadioError = %q", s.RadioError)
+	}
+	if s.Lock == nil || s.Lock.Skipped {
+		t.Fatalf("locked view must not be skipped: %+v", s.Lock)
+	}
+	steps(e, 1)
+	if n := r.attemptCount(ch); n != 2 {
+		t.Fatalf("tune attempts = %d, want 2", n)
 	}
 }
