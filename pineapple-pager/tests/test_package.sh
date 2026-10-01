@@ -24,4 +24,9 @@ tar -xzf "$ARCHIVE" -C "$TMP/extracted"
 (cd "$TMP/extracted" && shasum -a 256 -c "$MANIFEST" >/dev/null)
 assert_rc "$?" "0" "archive contents match manifest"
 
+tar -tzf "$ARCHIVE" | grep -q '^\./user/defcon/RF-BUDDY/rf-buddy-ui$'
+assert_rc "$?" "0" "archive ships RF-BUDDY under user/defcon"
+tar -tzf "$ARCHIVE" | grep -q '^\./user/defcon/DEFCON-DEFENSE/defcon-ui$'
+assert_rc "$?" "0" "archive ships DEFCON-DEFENSE under user/defcon"
+
 exit "$FAIL"

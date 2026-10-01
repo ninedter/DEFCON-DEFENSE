@@ -22,6 +22,10 @@ for p in \
   user/defcon/DEFCON-DEFENSE/rf_guard_lib.sh \
   user/defcon/DEFCON-DEFENSE/trusted_aps.conf \
   user/defcon/DEFCON-DEFENSE/virtual-pager-bridge.js \
+  user/defcon/RF-BUDDY/payload.sh \
+  user/defcon/RF-BUDDY/README.md \
+  user/defcon/RF-BUDDY/rf-buddy-ui \
+  user/defcon/RF-BUDDY/virtual-pager-bridge.js \
   user/general/PORT_ALERT/payload.sh \
   user/general/ICMP_ALERT/payload.sh \
   user/reconnaissance/find_hackers/payload.sh \
@@ -122,6 +126,15 @@ rg -q 'LIVE RF TRAFFIC' "$UNIFIED"; assert_rc "$?" "0" "normal live traffic has 
 rg -q 'THREAT ACTIVITY' "$UNIFIED"; assert_rc "$?" "0" "actionable threat traffic has a separate page"
 if rg -n 'WIFI_PCAP_START[[:space:]]+"' "$OUT/user/defcon/DEFCON-DEFENSE" >/dev/null 2>&1; then pcap_args_rc=1; else pcap_args_rc=0; fi
 assert_rc "$pcap_args_rc" "0" "firmware-native PCAP command is called without unsupported arguments"
+
+# RF-BUDDY ships as its own payload with its own native binary.
+file "$OUT/user/defcon/RF-BUDDY/rf-buddy-ui" | grep -q 'ELF 32-bit.*MIPS'
+assert_rc "$?" "0" "RF-BUDDY UI is compiled for the Pager MIPS architecture"
+assert_eq "$(ls -l "$OUT/user/defcon/RF-BUDDY/rf-buddy-ui" | cut -c1-10)" "-rwxr-xr-x" \
+  "RF-BUDDY UI binary is executable"
+[ ! -e "$OUT/user/defcon/RF-BUDDY/ui" ]; assert_rc "$?" "0" "RF-BUDDY Go source is not shipped"
+cmp -s "$OUT/user/defcon/RF-BUDDY/virtual-pager-bridge.js" "$OUT/user/defcon/DEFCON-DEFENSE/virtual-pager-bridge.js"
+assert_rc "$?" "0" "RF-BUDDY reuses the DEFCON-DEFENSE Virtual Pager bridge"
 
 # every built payload.sh is syntactically valid
 err=0; while IFS= read -r f; do bash -n "$f" || err=1; done < <(find "$OUT" -name '*.sh')

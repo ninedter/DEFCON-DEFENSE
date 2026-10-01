@@ -33,6 +33,15 @@ bash "$HERE/src/user/defcon/DEFCON-DEFENSE/ui/build.sh" \
   "$OUT/user/defcon/DEFCON-DEFENSE/defcon-ui"
 rm -rf "$OUT/user/defcon/DEFCON-DEFENSE/ui"
 
+# Office interference finder: a separate payload with its own native UI.
+# It reuses the DEFCON-DEFENSE Virtual Pager bridge (served on port 1472).
+cp -R "$HERE/src/user/defcon/RF-BUDDY" "$OUT/user/defcon/"
+cp "$HERE/src/user/defcon/DEFCON-DEFENSE/virtual-pager-bridge.js" \
+  "$OUT/user/defcon/RF-BUDDY/virtual-pager-bridge.js"
+bash "$HERE/src/user/defcon/RF-BUDDY/ui/build.sh" \
+  "$OUT/user/defcon/RF-BUDDY/rf-buddy-ui"
+rm -rf "$OUT/user/defcon/RF-BUDDY/ui"
+
 # Curated stock detectors (whole directories, verbatim).
 # Required core must exist; optional ones are best-effort — the community
 # library evolves, so a payload may be renamed or removed in newer versions.
@@ -52,6 +61,7 @@ done
 # Deterministic 644 regardless of the builder's umask (device payload convention).
 find "$OUT" -type f -exec chmod 644 {} +
 chmod 755 "$OUT/user/defcon/DEFCON-DEFENSE/defcon-ui"
+chmod 755 "$OUT/user/defcon/RF-BUDDY/rf-buddy-ui"
 
 # Syntax-check the whole output
 err=0

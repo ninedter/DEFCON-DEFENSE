@@ -9,6 +9,7 @@ a repeated same-offense**, stay quiet on ambient DEF CON noise.
 | Payload | Type | Warns you when… |
 |---|---|---|
 | `user/defcon/DEFCON-DEFENSE` | on-demand | runs a dedicated 480x222 full-screen Pager application with the designed general, threat-detail, and PCAP-evidence interfaces; it supplies live passive 2.4/5 GHz Recon, background trusted/watched-network correlation, bounded investigation capture, evidence verification, and later download through Virtual Pager |
+| `user/defcon/RF-BUDDY` | on-demand | separate full-screen 2.4/5 GHz interference finder: a live channel overview, a 1-second lock-on meter with tick, and a survey log, so you can walk an office and find where Wi-Fi and Bluetooth suffer and why (interference, congestion, overlap, Bluetooth density, weak coverage). Recon keeps running, locked to one channel at a time |
 | `alerts/deauth_flood_detected/defcon_sentry` | auto (custom) | the **same** attacker sustains a deauth/disassoc flood (3 hits/2 min, 5 min cooldown; watched MACs escalate instantly), then immediately starts a bounded passive PCAP when storage and concurrency guards allow |
 | `alerts/pineapple_client_connected/defcon_honeypot` | auto (custom) | a client joins **your decoy AP** (first sighting per client, dedup reconnects; flags randomized/private MACs — most modern phones use these, so it's expected, not alarming) |
 | `user/general/PORT_ALERT` | on-demand | someone port-scans the Pager (auto-hardens firewall 60s) |
@@ -69,6 +70,19 @@ PMKID attacks, handshake capture/crack, captive portals, PineAP karma/rogue-AP.
 - **On a wired/again-connected network you control:** run `PORT_ALERT` /
   `ICMP_ALERT` to catch someone scanning the Pager itself.
 
+## Hunting office interference (RF-BUDDY)
+
+Both custom payloads live in their own **defcon** folder in the Payloads menu
+(`./deploy.sh` registers it — see Install). Open `RF-BUDDY`. The overview ranks
+every 2.4 GHz channel (UP/DOWN for 5 GHz) by interference score and names the
+likely cause. Select the worst channel and press A to lock on: the score updates
+every second and the tick speeds up as you get closer to the problem. Press A to
+MARK SPOT where it peaks, then match the numbered marks in
+`/root/loot/rf_buddy/<date-time>/marks.csv` to places in the office. Set
+`OFFICE_SSID` in its `payload.sh` to also flag weak coverage. The Pager's radio
+cannot report busy time or noise floor, so RF-BUDDY scores channels from Wi-Fi
+airtime, retries, AP crowding, and Bluetooth density.
+
 ## Tuning
 
 Each custom handler has a CONFIG block at the top of its `payload.sh`:
@@ -90,6 +104,7 @@ threshold — see each payload's own comments/README.
 - `/root/loot/defcon_sentry/honeypot.csv` — every decoy-AP connect.
 - `/root/loot/defcon_sentry/honeypot_state.csv` — per-client dedup state.
 - `/root/loot/defcon_defense/baseline_bssids.txt` — operator-approved baseline.
+- `/root/loot/rf_buddy/<date-time>/` — RF-BUDDY `samples.csv`, `marks.csv`, and `session.txt`.
 - `/root/loot/defcon_defense/watched_aps.tsv` — APs selected with the Pager arrows.
 - `/root/loot/defcon_defense/findings.tsv` — passive RF alerts and evidence.
 - `/root/loot/defcon_defense/latest_recon.json` — latest raw Recon snapshot.
