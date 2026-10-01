@@ -10,6 +10,7 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 PAGER_HOST="${PAGER_HOST:-root@172.16.52.1}"
 REMOTE_ROOT="${PAGER_PAYLOAD_ROOT:-/mmc/root/payloads}"
 LIBRARY="${PAGER_LIBRARY:-$HERE/library}"
+BACKUP_ROOT="${PAGER_BACKUP_ROOT:-/mmc/root/payload-backups}"
 SSH="${PAGER_SSH:-ssh}"
 DRY_RUN=0
 SKIP_BUILD=0
@@ -31,19 +32,25 @@ if [ ! -d "$LIBRARY/user/defcon/RF-BUDDY" ] || [ ! -d "$LIBRARY/user/defcon/DEFC
   exit 1
 fi
 
-# Runs on the Pager. Extracts to a staging folder, swaps it in, removes the
-# pre-move DEFCON_DEFENSE copy, and registers the menu category if needed.
+# Runs on the Pager. Extracts to a staging folder, moves any previous defcon
+# folder and the pre-move DEFCON_DEFENSE copy into a timestamped backup (never
+# deleting them), swaps the new tree in, and registers the menu category.
 REMOTE_SCRIPT="set -e
 cd '$REMOTE_ROOT/user'
+TS=\$(date +%Y%m%d-%H%M%S)
+BK='$BACKUP_ROOT'/\$TS
+BACKED_UP=0
 rm -rf defcon.new && mkdir defcon.new
 tar -C defcon.new -xf -
-rm -rf defcon.old
-if [ -d defcon ]; then mv defcon defcon.old; fi
+if [ -d defcon ]; then mkdir -p \"\$BK\"; mv defcon \"\$BK/defcon\"; BACKED_UP=1; fi
 mv defcon.new defcon
-rm -rf defcon.old
 chmod 755 defcon/DEFCON-DEFENSE/defcon-ui defcon/RF-BUDDY/rf-buddy-ui 2>/dev/null || true
-if [ -d general/DEFCON_DEFENSE ]; then rm -rf general/DEFCON_DEFENSE; echo 'removed old user/general/DEFCON_DEFENSE'; fi
-if ! uci -q get payloads.directories.payloaddir | grep -qw 'user/defcon'; then
+if [ -d general/DEFCON_DEFENSE ]; then
+  mkdir -p \"\$BK\"; mv general/DEFCON_DEFENSE \"\$BK/general-DEFCON_DEFENSE\"; BACKED_UP=1
+  echo \"moved old user/general/DEFCON_DEFENSE to \$BK\"
+fi
+if [ \"\$BACKED_UP\" = 1 ]; then echo \"backup: \$BK\"; fi
+if ! uci -q get payloads.directories.payloaddir | tr ' ' '\n' | grep -qx 'user/defcon'; then
   uci add_list payloads.directories.payloaddir='user/defcon'
   uci commit payloads
   echo 'registered user/defcon in the Payloads menu'
