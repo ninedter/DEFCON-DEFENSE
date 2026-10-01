@@ -116,10 +116,15 @@ ready=""
 while [ $# -gt 0 ]; do [ "$1" = "--ready-file" ] && ready="$2"; shift; done
 [ -n "$ready" ] && echo ready > "$ready"
 printf 'UIREADY\t-\n' >> "$REC"
+if [ -n "${FAKE_UI_LONG:-}" ]; then
+  echo $$ > "$TMP/ui.pid"
+  exec sleep 30
+fi
 sleep 0.4
 exit 0
 EOF
 chmod +x "$FAKE_UI"
+export TMP
 export RF_BUDDY_UI_BINARY="$FAKE_UI" FAKE_UI_ARGS="$TMP/ui-args"
 export FAKE_PINEAPPLE_PID=4242
 BUZ="$TMP/buzzer"; mkdir -p "$BUZ"; echo 255 > "$BUZ/brightness"
@@ -147,6 +152,10 @@ cancel_l="$(grep -n 'EXAMINE CANCEL' "$REC" | head -1 | cut -d: -f1)"
 [ -n "$cont_l" ] && [ -n "$cancel_l" ] && [ "$cont_l" -lt "$cancel_l" ]; assert_rc "$?" "0" "stock UI is resumed before the channel is released"
 between="$(sed -n "${stop_l:-1},${cont_l:-1}p" "$REC" | grep -Ec '^(LOG|ERROR|RINGTONE|VIBRATE)')"
 assert_eq "$between" "0" "no hak5 API call between SIGSTOP and SIGCONT"
+assert_eq "$(grep -c $'^KILL\t-CONT ' "$REC")" "1" "watchdog does not fire a second SIGCONT after a normal run"
+sleep 1.5
+assert_eq "$(grep -c $'^KILL\t-CONT ' "$REC")" "1" "watchdog is gone: still exactly one SIGCONT"
+assert_eq "$(grep -c 'EXAMINE CANCEL' "$REC")" "1" "watchdog does not release the channel a second time"
 log_l="$(grep -n '^LOG' "$REC" | head -1 | cut -d: -f1)"
 [ -n "$log_l" ] && [ -n "$stop_l" ] && [ "$log_l" -lt "$stop_l" ]; assert_rc "$?" "0" "the startup LOG happens before the freeze"
 unset FAKE_PINEAPPLE_PID
@@ -173,5 +182,59 @@ assert_rc "$passive_rc" "0" "payload never transmits or stops Recon"
 
 if grep -Eq 'pineapple/ui|bridge|killall|1472|RINGTONE|TICK_FILE|tick_loop' "$PAYLOAD"; then shared_rc=1; else shared_rc=0; fi
 assert_rc "$shared_rc" "0" "payload touches no shared UI, bridge, port 1472, ringtone or killall"
+
+# --- freeze-safety hardening -----------------------------------------------
+# cleanup must not be interruptible by a signal.
+[ "$(declare -f rf_buddy_cleanup | sed -n 3p | tr -d ' ;')" = "trap''INTTERMHUP" ]
+assert_rc "$?" "0" "rf_buddy_cleanup begins with trap '' INT TERM HUP"
+: > "$REC"; export FAKE_PINEAPPLE_PID=4242; rm -f "$TMP/survived"
+(
+  trap 'exit 143' TERM
+  stop_ui() { bash -c 'kill -TERM $PPID'; sleep 0.3; }
+  CLEANED=0; FROZEN_PIDS=4242; rf_lock_acquire
+  rf_buddy_cleanup
+  [ ! -d "$RF_BUDDY_LOCK_DIR" ] && echo ok > "$TMP/survived"
+)
+assert_eq "$(cat "$TMP/survived" 2>/dev/null)" "ok" "a TERM during cleanup does not cut cleanup short"
+assert_eq "$(grep -c $'^KILL\t-CONT 4242$' "$REC")" "1" "TERM during cleanup: stock UI still resumed"
+assert_eq "$(grep -c 'EXAMINE CANCEL' "$REC")" "1" "TERM during cleanup: channel still released"
+unset FAKE_PINEAPPLE_PID
+
+# freeze records the pids before STOP and keeps them when STOP fails.
+(
+  pidof() { echo "111 222"; }
+  kill() { return 1; }
+  FROZEN_PIDS=""; stock_ui_freeze; rc=$?
+  echo "$rc:$FROZEN_PIDS" > "$TMP/freeze-fail"
+)
+assert_eq "$(cat "$TMP/freeze-fail")" "1:111 222" "failed SIGSTOP returns 1 but keeps the pids for resume"
+
+# SIGKILL of payload.sh: the watchdog must undo the freeze on its own.
+# The watchdog runs as a separate (setsid when present) bash process; the
+# record/forward stubs reach it as exported functions, which bash children
+# import from the environment.
+: > "$REC"; rm -f "$TMP/ui.pid"
+export FAKE_PINEAPPLE_PID=4242 FAKE_UI_LONG=1
+echo 255 > "$BUZ/brightness"
+bash "$PAYLOAD" >/dev/null 2>&1 &
+ppid_=$!
+i=0
+while ! grep -q $'^KILL\t-STOP 4242$' "$REC" && [ "$i" -lt 100 ]; do sleep 0.1; i=$((i + 1)); done
+grep -q $'^KILL\t-STOP 4242$' "$REC"; assert_rc "$?" "0" "SIGKILL test: stock UI was frozen"
+sleep 0.5
+uipid_="$(cat "$TMP/ui.pid" 2>/dev/null)"
+builtin kill -9 "$ppid_" 2>/dev/null
+wait "$ppid_" 2>/dev/null
+i=0
+while [ -d "$RF_BUDDY_LOCK_DIR" ] && [ "$i" -lt 80 ]; do sleep 0.1; i=$((i + 1)); done
+[ ! -d "$RF_BUDDY_LOCK_DIR" ]; assert_rc "$?" "0" "SIGKILL test: watchdog removes the lock"
+assert_eq "$(grep -c $'^KILL\t-CONT 4242$' "$REC")" "1" "SIGKILL test: watchdog resumes the stock UI"
+grep -q 'EXAMINE CANCEL' "$REC"; assert_rc "$?" "0" "SIGKILL test: watchdog releases the channel"
+sleep 0.3
+if [ -n "$uipid_" ] && builtin kill -0 "$uipid_" 2>/dev/null; then x=1; else x=0; fi
+assert_rc "$x" "0" "SIGKILL test: watchdog terminated the orphaned UI"
+[ -n "$uipid_" ] && builtin kill -9 "$uipid_" 2>/dev/null
+assert_eq "$(cat "$BUZ/brightness")" "0" "SIGKILL test: watchdog forces the buzzer off"
+unset FAKE_PINEAPPLE_PID FAKE_UI_LONG
 
 exit "$FAIL"

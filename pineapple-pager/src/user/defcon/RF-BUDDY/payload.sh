@@ -52,6 +52,7 @@ READY_FILE="$RUN_DIR/ready"
 
 UI_PID=""
 FROZEN_PIDS=""
+WATCHDOG_PID=""
 LOCKED=0
 CLEANED=0
 
@@ -94,9 +95,10 @@ stock_ui_freeze() {
   local pids
   pids="$(pidof pineapple 2>/dev/null)"
   [ -n "$pids" ] || return 0
+  # Remember the pids first: even a partially applied STOP must be resumed.
+  FROZEN_PIDS="$pids"
   # shellcheck disable=SC2086
   kill -STOP $pids 2>/dev/null || return 1
-  FROZEN_PIDS="$pids"
 }
 
 # Idempotent: continue what we froze, and restart the stock UI if it is gone.
@@ -108,8 +110,57 @@ stock_ui_resume() {
   fi
   local initd="${RF_BUDDY_PINEAPPLE_INITD:-/etc/init.d/pineapplepager}"
   if [ -z "$(pidof pineapple 2>/dev/null)" ] && [ -x "$initd" ]; then
-    "$initd" start >/dev/null 2>&1 || true
+    # Cleanup runs with INT/TERM/HUP ignored; do not hand that to the UI.
+    ( trap - INT TERM HUP; "$initd" start >/dev/null 2>&1 ) || true
   fi
+}
+
+# Body of the freeze watchdog. It runs in its own process (see
+# rf_watchdog_start) and must stand alone: it only uses its arguments, never the
+# parent's state, and never calls hak5 API commands. When the payload is gone
+# (e.g. SIGKILLed) it undoes everything the payload did.
+rf_watchdog_body() {
+  trap '' HUP INT TERM
+  local ppid="$1" uipid="$2" frozen="$3" initd="$4" buzdir="$5" lockdir="$6"
+  local i=0 owner=""
+  while kill -0 "$ppid" 2>/dev/null; do sleep 1; done
+  if [ -n "$uipid" ] && kill -0 "$uipid" 2>/dev/null; then
+    kill "$uipid" 2>/dev/null || true
+    while kill -0 "$uipid" 2>/dev/null && [ "$i" -lt 30 ]; do
+      sleep 0.1
+      i=$((i + 1))
+    done
+    kill -0 "$uipid" 2>/dev/null && kill -KILL "$uipid" 2>/dev/null
+  fi
+  # shellcheck disable=SC2086
+  [ -n "$frozen" ] && kill -CONT $frozen 2>/dev/null
+  if [ -z "$(pidof pineapple 2>/dev/null)" ] && [ -x "$initd" ]; then
+    ( trap - INT TERM HUP; "$initd" start >/dev/null 2>&1 )
+  fi
+  [ -w "$buzdir/brightness" ] && echo 0 > "$buzdir/brightness" 2>/dev/null
+  _pineap EXAMINE CANCEL >/dev/null 2>&1
+  [ -f "$lockdir/pid" ] && owner="$(cat "$lockdir/pid" 2>/dev/null)"
+  if [ "$owner" = "$ppid" ]; then
+    rm -f "$lockdir/pid" 2>/dev/null
+    rmdir "$lockdir" 2>/dev/null
+  fi
+  return 0
+}
+
+# Start the detached watchdog right after a successful freeze.
+rf_watchdog_start() {
+  local initd="${RF_BUDDY_PINEAPPLE_INITD:-/etc/init.d/pineapplepager}"
+  local script
+  script="$(declare -f rf_watchdog_body); rf_watchdog_body \"\$@\""
+  if command -v setsid >/dev/null 2>&1; then
+    setsid bash -c "$script" rf-buddy-watchdog "$$" "$UI_PID" "$FROZEN_PIDS" \
+      "$initd" "$BUZZER_DIR" "$LOCK_DIR" </dev/null >/dev/null 2>&1 &
+  else
+    bash -c "$script" rf-buddy-watchdog "$$" "$UI_PID" "$FROZEN_PIDS" \
+      "$initd" "$BUZZER_DIR" "$LOCK_DIR" </dev/null >/dev/null 2>&1 &
+  fi
+  WATCHDOG_PID=$!
+  disown "$WATCHDOG_PID" 2>/dev/null || true
 }
 
 # Stop our UI: TERM, then KILL after 3 s.
@@ -130,11 +181,17 @@ stop_ui() {
 }
 
 rf_buddy_cleanup() {
+  trap '' INT TERM HUP
   [ "$CLEANED" = "1" ] && return 0
   CLEANED=1
   stop_ui
   # Hand the stock UI back first; nothing below needs the UI to stay frozen.
   stock_ui_resume
+  # The UI is back; the watchdog must not fire a second time.
+  if [ -n "$WATCHDOG_PID" ]; then
+    kill -KILL "$WATCHDOG_PID" 2>/dev/null || true
+    WATCHDOG_PID=""
+  fi
   # Backstop: a SIGKILLed UI must never leave the buzzer sounding.
   [ -w "$BUZZER_DIR/brightness" ] && echo 0 > "$BUZZER_DIR/brightness" 2>/dev/null || true
   release_channel
@@ -187,7 +244,10 @@ rf_buddy_main() {
     sleep 0.05
     i=$((i + 1))
   done
-  [ -f "$READY_FILE" ] && { stock_ui_freeze || true; }
+  if [ -f "$READY_FILE" ]; then
+    stock_ui_freeze || true
+    [ -n "$FROZEN_PIDS" ] && rf_watchdog_start
+  fi
   wait "$UI_PID"
   rc=$?
   UI_PID=""
