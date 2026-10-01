@@ -70,6 +70,7 @@ func ensurePath() {
 
 func main() {
 	ensurePath()
+	setLocalZone(os.ReadFile)
 	o, err := parseOptions(os.Args[1:])
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
