@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"strings"
 	"testing"
 	"time"
@@ -50,5 +51,20 @@ func TestBLEScannerConsumesHcidumpStream(t *testing.T) {
 	s.consumeDump(strings.NewReader("garbage that is not btsnoop"))
 	if got := s.Tracker.Count(now); got != 0 {
 		t.Fatalf("devices from bad stream = %d", got)
+	}
+}
+
+// hcidump prints its "HCI sniffer" banner to stdout before the btsnoop header
+// when writing to /dev/stdout (seen on the Pager).
+func TestBLEScannerSkipsHcidumpBanner(t *testing.T) {
+	now := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	s := &BLEScanner{Tracker: NewBLETracker(30 * time.Second), Now: func() time.Time { return now }}
+	stream := []byte("HCI sniffer - Bluetooth packet analyzer ver 5.72\n")
+	stream = append(stream, header(dlHCIUART)...)
+	stream = append(stream, record(3, append([]byte{0x04}, hx(t, realA)...))...)
+	s.consumeDump(bytes.NewReader(stream))
+	devs := s.Tracker.Devices(now)
+	if len(devs) != 1 || devs[0].Addr != "02:68:EB:EC:8C:6E" || devs[0].RSSI != -77 {
+		t.Fatalf("devices = %+v", devs)
 	}
 }

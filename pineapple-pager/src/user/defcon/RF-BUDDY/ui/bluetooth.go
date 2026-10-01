@@ -2,7 +2,9 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
+	"errors"
 	"io"
 	"os"
 	"os/exec"
@@ -129,7 +131,30 @@ func (s *BLEScanner) consume(r io.Reader) {
 
 // consumeDump decodes a btsnoop stream into the tracker until EOF or error.
 func (s *BLEScanner) consumeDump(r io.Reader) {
-	_ = ReadBTSnoop(r, func(a Advert) { s.Tracker.Observe(a, s.Now()) })
+	br := bufio.NewReader(r)
+	if skipToBTSnoop(br, 4096) != nil {
+		_, _ = io.Copy(io.Discard, br) // keep draining so hcidump never blocks
+		return
+	}
+	_ = ReadBTSnoop(br, func(a Advert) { s.Tracker.Observe(a, s.Now()) })
+}
+
+// skipToBTSnoop discards bytes up to the btsnoop magic; hcidump writes its
+// "HCI sniffer" banner to stdout before the capture when -w is /dev/stdout.
+func skipToBTSnoop(br *bufio.Reader, limit int) error {
+	for skipped := 0; skipped <= limit; skipped++ {
+		head, err := br.Peek(len(btsnoopMagic))
+		if err != nil {
+			return err
+		}
+		if bytes.Equal(head, btsnoopMagic) {
+			return nil
+		}
+		if _, err := br.Discard(1); err != nil {
+			return err
+		}
+	}
+	return errors.New("btsnoop: no header in hcidump output")
 }
 
 // BluetoothAvailable reports whether hcitool and the adapter both exist.
