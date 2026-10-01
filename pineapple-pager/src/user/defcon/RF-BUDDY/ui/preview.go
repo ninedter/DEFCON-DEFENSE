@@ -125,15 +125,15 @@ func previewBTSnapshot(now time.Time) Snapshot {
 		{"UNKNOWN", "OTHER", "", -100, 0.2, 0, "", "", "", "", nil, false},
 		{"SAMSUNG", "PHONE", "GALAXY S23", -61, 2.4, 8, "", "", "SAMSUNG ELECTRONICS", "", nil, false},
 		{"BOSE", "AUDIO", "BOSE QC35 II", -66, 1.9, 0, "", "", "BOSE", "", []string{"LE AUDIO"}, false},
-		{"HARMAN", "SPEAKER", "JBL FLIP 5", -70, 1.7, 0, "", "", "HARMAN", "", nil, false},
+		{"HARMAN JBL", "SPEAKER", "JBL FLIP 5", -70, 1.7, 0, "", "", "HARMAN JBL", "", nil, false},
 		{"POLAR", "HEART RATE", "POLAR H10 A1B2C3", -72, 1.0, 0, "", "", "POLAR", "", []string{"HEART RATE", "BATTERY"}, true},
 		{"REALTEK", "OTHER", "", -84, 0.6, 0, "", "", "REALTEK", "", nil, true},
-		{"ID B5B5", "OTHER", "", -88, 0.5, 0, "", "", "B5 LABS WIRELESS", "D1:7A:3C:09:E2:5B", nil, false},
+		{"ID B5B5", "OTHER", "", -88, 0.5, 0, "", "", "", "D1:7A:3C:09:E2:5B", nil, false},
 	}
 	for i, d := range devs {
 		b := BLEDevice{
 			Addr:   fmt.Sprintf("%02X:%02X:%02X:%02X:%02X:%02X", 0x40+i, 0x63^i, 0xB5-i, 0x11*(i%9), 0x20+3*i, 0xA0+i),
-			Random: !d.public && d.brand != "BOSE" && d.brand != "HARMAN",
+			Random: !d.public && d.brand != "BOSE" && d.brand != "HARMAN JBL",
 			Brand:  d.brand, Type: d.typ, Name: d.name, Maker: d.brand, Kind: d.typ,
 			Model: d.model, BeaconInfo: d.beacon, MakerFull: d.makerFull, Services: d.svc,
 			RSSI: d.rssi, Peak: min(-30, d.rssi+6+i%5), AdvPerSec: d.adv, TxPower: d.tx, HasTx: d.tx != 0,

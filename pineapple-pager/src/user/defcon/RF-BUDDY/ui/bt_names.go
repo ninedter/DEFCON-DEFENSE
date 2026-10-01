@@ -80,7 +80,7 @@ var nameRules = []nameRule{
 	sub("[TV] SAMSUNG", "SAMSUNG", "TV"), sub("SAMSUNG TV", "SAMSUNG", "TV"), pre("[TV]", "SAMSUNG", "TV"),
 	sub("[LG]", "LG", "TV"), sub("LG TV", "LG", "TV"), sub("WEBOS", "LG", "TV"),
 	sub("SAMSUNG", "SAMSUNG", "OTHER"),
-	word("JBL", "JBL", "SPEAKER"),
+	word("JBL", "HARMAN JBL", "SPEAKER"),
 	word("BOSE", "BOSE", "AUDIO"), sub("LE-BOSE", "BOSE", "AUDIO"),
 	word("SONY", "SONY", "AUDIO"), pre("WH-", "SONY", "AUDIO"), pre("WF-", "SONY", "AUDIO"),
 	pre("LE_WH-", "SONY", "AUDIO"), pre("LE_WF-", "SONY", "AUDIO"),

@@ -71,7 +71,7 @@ payload (no network needed). The brand is the first hit of: Bluetooth SIG
 company ID (also tried byte-swapped), SIG member service UUID (for example
 Tile, Google), keyword in the advertised name, IEEE OUI of a **PUBLIC**
 address only (a random address says nothing about the maker), first word of
-the name, an `ID XXXX` placeholder for an unregistered company ID, else
+the name, a brand hinted by a service UUID, an `ID XXXX` placeholder for an unregistered company ID, else
 UNKNOWN. The kind is the first hit of: maker-specific decoding (Apple proximity
 pairing models, iBeacon, Microsoft CDP device type, Eddystone), name keyword,
 standard SIG services, SIG appearance, else OTHER.

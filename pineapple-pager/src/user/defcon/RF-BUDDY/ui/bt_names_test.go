@@ -14,7 +14,7 @@ func TestNameKeywordTable(t *testing.T) {
 		{"[TV] SAMSUNG 7 SERIES", "SAMSUNG", "TV"}, {"SAMSUNG TV Q80", "SAMSUNG", "TV"}, {"[TV]LIVING ROOM", "SAMSUNG", "TV"},
 		{"[LG] WEBOS TV", "LG", "TV"}, {"LG TV 55", "LG", "TV"}, {"WEBOS TV", "LG", "TV"},
 		{"SAMSUNG SOUNDBAR", "SAMSUNG", "OTHER"},
-		{"JBL FLIP 5", "JBL", "SPEAKER"},
+		{"JBL FLIP 5", "HARMAN JBL", "SPEAKER"},
 		{"BOSE QC35", "BOSE", "AUDIO"}, {"LE-BOSE SOUNDLINK", "BOSE", "AUDIO"},
 		{"SONY XM4", "SONY", "AUDIO"}, {"WH-1000XM4", "SONY", "AUDIO"}, {"WF-1000XM4", "SONY", "AUDIO"},
 		{"LE_WH-1000XM5", "SONY", "AUDIO"}, {"LE_WF-C500", "SONY", "AUDIO"},
@@ -83,8 +83,8 @@ func TestNameKeywordFalsePositives(t *testing.T) {
 func TestNameKeywordOrder(t *testing.T) {
 	// First matching row wins.
 	for n, want := range map[string]string{
-		"JBL CHARGE 5":   "JBL",   // before FITBIT's CHARGE 5
-		"BEATS AIRPODS":  "APPLE", // AIRPODS row precedes BEATS
+		"JBL CHARGE 5":   "HARMAN JBL", // before FITBIT's CHARGE 5
+		"BEATS AIRPODS":  "APPLE",      // AIRPODS row precedes BEATS
 		"GALAXY BUDS":    "SAMSUNG",
 		"SAMSUNG TV":     "SAMSUNG",
 		"SONY WH-1000":   "SONY",
