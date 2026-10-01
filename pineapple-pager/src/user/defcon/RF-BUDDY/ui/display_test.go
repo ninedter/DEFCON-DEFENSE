@@ -2,10 +2,12 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"image"
 	"image/color"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -82,7 +84,9 @@ func TestVirtualButtonHandlerQueuesOnePress(t *testing.T) {
 	h := virtualButtonHandler(buttons)
 	post := func(name string) int {
 		rec := httptest.NewRecorder()
-		h(rec, httptest.NewRequest(http.MethodPost, "/button?name="+name, nil))
+		req := httptest.NewRequest(http.MethodPost, "/button?name="+name, nil)
+		req.Header.Set("X-RF-Buddy", "1")
+		h(rec, req)
 		return rec.Code
 	}
 	if code := post("A"); code != http.StatusNoContent {
@@ -101,6 +105,64 @@ func TestVirtualButtonHandlerQueuesOnePress(t *testing.T) {
 	}
 	if got := <-buttons; got != "A" {
 		t.Fatalf("queued %q, want A", got)
+	}
+}
+
+func TestVirtualButtonRequiresHeaderAndNoCORS(t *testing.T) {
+	buttons := make(chan string, 1)
+	h := virtualButtonHandler(buttons)
+	rec := httptest.NewRecorder()
+	h(rec, httptest.NewRequest(http.MethodPost, "/button?name=A", nil))
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("POST without X-RF-Buddy = %d, want 403", rec.Code)
+	}
+	if len(buttons) != 0 {
+		t.Fatal("a refused press must not be queued")
+	}
+	rec = httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/button?name=A", nil)
+	req.Header.Set("X-RF-Buddy", "1")
+	h(rec, req)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("POST with header = %d, want 204", rec.Code)
+	}
+	if v := rec.Header().Get("Access-Control-Allow-Origin"); v != "" {
+		t.Fatalf("ACAO = %q, want none", v)
+	}
+	rec = httptest.NewRecorder()
+	h(rec, httptest.NewRequest(http.MethodOptions, "/button?name=A", nil))
+	if rec.Code == http.StatusNoContent || rec.Header().Get("Access-Control-Allow-Origin") != "" {
+		t.Fatalf("preflight must fail without CORS headers, got %d %v", rec.Code, rec.Header())
+	}
+	srv := httptest.NewServer(newMirror().handler(make(chan string, 1)))
+	defer srv.Close()
+	for _, path := range []string{"/health", "/screen.png"} {
+		resp, err := http.Get(srv.URL + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if v := resp.Header.Get("Access-Control-Allow-Origin"); v != "" {
+			t.Errorf("%s ACAO = %q, want none", path, v)
+		}
+	}
+}
+
+func TestMirrorServeReportsListenError(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	err = newMirror().serve(context.Background(), ln.Addr().String(), make(chan string, 1))
+	if err == nil {
+		t.Fatal("serve on a busy address must return the error")
+	}
+}
+
+func TestViewerPageSendsHeader(t *testing.T) {
+	if !strings.Contains(viewerHTML, "X-RF-Buddy") {
+		t.Fatal("viewer page must send the X-RF-Buddy header")
 	}
 }
 

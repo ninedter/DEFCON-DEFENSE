@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"image"
 	"image/color"
@@ -147,7 +148,6 @@ func (m *mirror) handler(buttons chan<- string) http.Handler {
 		_, _ = io.WriteString(w, viewerHTML)
 	})
 	mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Cache-Control", "no-store")
 		w.WriteHeader(http.StatusOK)
 		_, _ = io.WriteString(w, "RF-BUDDY UI active\n")
@@ -158,8 +158,6 @@ func (m *mirror) handler(buttons chan<- string) http.Handler {
 }
 
 func (m *mirror) serveScreen(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-	w.Header().Set("Access-Control-Expose-Headers", "ETag")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Content-Type", "image/png")
 	clientETag := r.Header.Get("If-None-Match")
@@ -200,7 +198,9 @@ func (m *mirror) serveScreen(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (m *mirror) serve(ctx context.Context, listen string, buttons chan<- string) {
+// serve runs the viewer until ctx ends. It returns the listen error (for
+// example when the USB address is not up yet), nil on a clean shutdown.
+func (m *mirror) serve(ctx context.Context, listen string, buttons chan<- string) error {
 	server := &http.Server{Addr: listen, Handler: m.handler(buttons), ReadHeaderTimeout: 2 * time.Second}
 	go func() {
 		<-ctx.Done()
@@ -208,20 +208,23 @@ func (m *mirror) serve(ctx context.Context, listen string, buttons chan<- string
 		defer cancel()
 		_ = server.Shutdown(shutdownCtx)
 	}()
-	_ = server.ListenAndServe()
+	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		return err
+	}
+	return nil
 }
 
 func virtualButtonHandler(buttons chan<- string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
 		w.Header().Set("Cache-Control", "no-store")
-		if r.Method == http.MethodOptions {
-			w.WriteHeader(http.StatusNoContent)
-			return
-		}
 		if r.Method != http.MethodPost {
 			http.Error(w, "POST required", http.StatusMethodNotAllowed)
+			return
+		}
+		// A custom header forces a CORS preflight from other sites, which this
+		// server never approves, so only the on-page buttons can press.
+		if r.Header.Get("X-RF-Buddy") != "1" {
+			http.Error(w, "forbidden", http.StatusForbidden)
 			return
 		}
 		button := normalizeButton(r.URL.Query().Get("name"))

@@ -46,7 +46,7 @@ const viewerHTML = `<!doctype html>
     }
   }
   function press(name) {
-    fetch("/button?name=" + name, { method: "POST" }).catch(function () {});
+    fetch("/button?name=" + name, { method: "POST", headers: { "X-RF-Buddy": "1" } }).catch(function () {});
   }
   ["LEFT", "UP", "DOWN", "RIGHT", "B", "A"].forEach(function (n) {
     document.getElementById(n).addEventListener("click", function () { press(n); });

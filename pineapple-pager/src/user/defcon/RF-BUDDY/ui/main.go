@@ -174,10 +174,18 @@ func run(o options) error {
 	}
 
 	mir := newMirror()
+	// A viewer that cannot listen (USB address not up) must not stop the
+	// payload; the reason lands in session.txt instead.
+	viewerErr := make(chan error, 1)
+	var sessionBase, viewerNote string
 	// Keep only one unhandled press so double clicks cannot skip a screen.
 	buttons := make(chan string, 1)
 	if o.virtualListen != "" {
-		go mir.serve(ctx, o.virtualListen, buttons)
+		go func() {
+			if err := mir.serve(ctx, o.virtualListen, buttons); err != nil && ctx.Err() == nil {
+				viewerErr <- err
+			}
+		}()
 	}
 	go func() {
 		// Let the A press that confirmed the payload launch finish first.
@@ -235,13 +243,19 @@ func run(o options) error {
 		select {
 		case <-ctx.Done():
 			return nil
+		case err := <-viewerErr:
+			viewerNote = "viewer: " + err.Error() + "\n"
+			if sessionBase != "" {
+				_ = logger.WriteSession(sessionBase + viewerNote)
+			}
 		case caps := <-probeDone:
 			view.SetProbe(caps)
 			text := sessionText(o, caps, started)
 			if buzzerErr != nil {
 				text += "buzzer: " + buzzerErr.Error() + "\n"
 			}
-			_ = logger.WriteSession(text)
+			sessionBase = text
+			_ = logger.WriteSession(sessionBase + viewerNote)
 			if caps.Fatal() {
 				// Nothing to measure: hand the channel back right away.
 				_ = radio.Release(ctx)
