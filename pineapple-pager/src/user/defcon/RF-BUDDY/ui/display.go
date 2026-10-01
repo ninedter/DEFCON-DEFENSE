@@ -311,10 +311,10 @@ func readButtonDevice(ctx context.Context, inputDevice string, out chan<- string
 
 func buttonForLinuxKey(code uint16) string {
 	switch code {
-	case 304: // BTN_SOUTH
-		return "A"
-	case 305: // BTN_EAST
+	case 304: // BTN_SOUTH - physical red/B on the Pager
 		return "B"
+	case 305: // BTN_EAST - physical green/A on the Pager
+		return "A"
 	case 103: // KEY_UP
 		return "UP"
 	case 108: // KEY_DOWN

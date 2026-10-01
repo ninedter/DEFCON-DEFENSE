@@ -194,3 +194,14 @@ func TestViewerPageServedAtRootOnly(t *testing.T) {
 		t.Fatalf("GET /nope = %d, want 404", resp.StatusCode)
 	}
 }
+
+// On the Pager the physical red button reports BTN_SOUTH (304) and the green
+// button BTN_EAST (305); the on-screen hints are red B and green A.
+func TestPhysicalButtonsMatchPagerColours(t *testing.T) {
+	cases := map[uint16]string{304: "B", 305: "A", 103: "UP", 108: "DOWN", 105: "LEFT", 106: "RIGHT", 1: ""}
+	for code, want := range cases {
+		if got := buttonForLinuxKey(code); got != want {
+			t.Errorf("buttonForLinuxKey(%d) = %q, want %q", code, got, want)
+		}
+	}
+}
