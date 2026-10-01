@@ -53,6 +53,11 @@ const (
 	passiveCaptureLabel   = "PASSIVE CAPTURE:"
 	passiveCaptureLabelX  = 244
 	passiveCaptureIconGap = 8
+
+	// Footer dividers between the B (left) and A (right) hint cells; B is the
+	// left physical button, so its hint occupies the narrower leading cell.
+	threatFooterSplitX   = 90
+	evidenceFooterSplitX = 72
 )
 
 var (
@@ -1043,10 +1048,10 @@ func (a *app) renderGeneral(img *image.RGBA, s liveState) {
 		drawTextRightBox(img, image.Rect(320, y[i], 453, y[i]+22), y[i]+3, row.right, fg, i == a.generalSelected)
 	}
 	hLine(img, 9, 471, 188, cyan2)
-	drawText(img, 14, 199, "A", green, true, 1)
-	drawText(img, 35, 199, "OPEN", white, true, 1)
-	drawText(img, 145, 199, "B", red, true, 1)
-	drawText(img, 165, 199, "EXIT", white, true, 1)
+	drawText(img, 14, 199, "B", red, true, 1)
+	drawText(img, 35, 199, "EXIT", white, true, 1)
+	drawText(img, 145, 199, "A", green, true, 1)
+	drawText(img, 165, 199, "OPEN", white, true, 1)
 	drawText(img, 263, 199, "LEFT/RIGHT", yellow, true, 1)
 	drawText(img, 386, 199, "PAGE", white, true, 1)
 }
@@ -1115,11 +1120,11 @@ func (a *app) renderThreat(img *image.RGBA, s liveState) {
 	a.renderer.drawIcon(img, passiveIconX, 156, "\ue1da", 16, green)
 
 	stroke(img, image.Rect(4, 173, 476, 202), 1, white)
-	for _, x := range []int{136, 225, 350} {
+	for _, x := range []int{threatFooterSplitX, 225, 350} {
 		vLine(img, x, 173, 202, white)
 	}
-	drawButtonHint(img, 12, 180, "A", "INVESTIGATE", cyan)
-	drawButtonHint(img, 145, 180, "B", "MUTE", cyan)
+	drawButtonHintBox(img, image.Rect(5, 174, threatFooterSplitX, 201), 12, 180, 23, "B", "MUTE", cyan)
+	drawButtonHintBox(img, image.Rect(threatFooterSplitX+1, 174, 225, 201), threatFooterSplitX+9, 180, 23, "A", "INVESTIGATE", cyan)
 	a.renderer.drawIcon(img, 239, 178, "\ue5c4", 20, cyan)
 	drawText(img, 263, 181, "GENERAL", cyan, true, 1)
 	a.renderer.drawIcon(img, 360, 178, "\ue5c8", 20, cyan)
@@ -1176,12 +1181,11 @@ func (a *app) renderEvidence(img *image.RGBA, s liveState) {
 	hLine(img, 4, 476, 164, cyan2)
 	drawText(img, 11, 174, "DOWNLOAD VIA VIRTUAL PAGER", green, true, 1)
 	stroke(img, image.Rect(4, 190, 476, 219), 1, cyan2)
-	for _, x := range []int{86, 163, 241, 323, 402} {
+	for _, x := range []int{evidenceFooterSplitX, 163, 241, 323, 402} {
 		vLine(img, x, 190, 219, cyan2)
 	}
-	drawTextBox(img, image.Rect(5, 191, 85, 218), 9, 197, "A", green, true, 1)
-	drawTextBox(img, image.Rect(5, 191, 85, 218), 26, 197, "DETAILS", white, true, 1)
-	drawButtonHint(img, 94, 197, "B", "BACK", white)
+	drawButtonHintBox(img, image.Rect(5, 191, evidenceFooterSplitX, 218), 9, 197, 17, "B", "BACK", white)
+	drawButtonHintBox(img, image.Rect(evidenceFooterSplitX+1, 191, 163, 218), evidenceFooterSplitX+8, 197, 17, "A", "DETAILS", white)
 	a.renderer.drawIcon(img, 171, 195, "\ue5c4", 18, cyan)
 	drawText(img, 194, 198, "PAGE", white, true, 1)
 	a.renderer.drawIcon(img, 248, 195, "\ue5c8", 18, cyan)
@@ -1213,10 +1217,10 @@ func (a *app) renderEvidenceDetail(img *image.RGBA, s liveState) {
 	}
 	drawMetricWide(img, 12, 156, "SHA-256:", trimCells(hash, 34), yellow)
 	hLine(img, 4, 476, 183, cyan2)
-	drawText(img, 11, 194, "A", green, true, 1)
-	drawText(img, 30, 194, "VERIFY SHA-256", white, true, 1)
-	drawText(img, 201, 194, "B", red, true, 1)
-	drawText(img, 220, 194, "BACK", white, true, 1)
+	drawText(img, 11, 194, "B", red, true, 1)
+	drawText(img, 30, 194, "BACK", white, true, 1)
+	drawText(img, 90, 194, "A", green, true, 1)
+	drawText(img, 109, 194, "VERIFY SHA-256", white, true, 1)
 	drawText(img, 289, 194, "DOWNLOAD: VIRTUAL PAGER", cyan, true, 1)
 }
 
@@ -1358,13 +1362,14 @@ func drawMetricWide(img *image.RGBA, x, y int, label, value string, valueColor c
 	drawText(img, x+145, y, trimCells(value, 39), valueColor, true, 1)
 }
 
-func drawButtonHint(img *image.RGBA, x, y int, key, label string, labelColor color.RGBA) {
+// drawButtonHintBox draws a key/label pair clipped to its footer cell.
+func drawButtonHintBox(img *image.RGBA, box image.Rectangle, x, y, labelOffset int, key, label string, labelColor color.RGBA) {
 	keyColor := green
 	if key == "B" {
 		keyColor = red
 	}
-	drawText(img, x, y, key, keyColor, true, 1)
-	drawText(img, x+23, y, label, labelColor, true, 1)
+	drawTextBox(img, box, x, y, key, keyColor, true, 1)
+	drawTextBox(img, box, x+labelOffset, y, label, labelColor, true, 1)
 }
 
 func fill(img *image.RGBA, rect image.Rectangle, c color.RGBA) {
