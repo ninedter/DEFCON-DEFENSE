@@ -225,6 +225,14 @@ func secondsAgo(at, now time.Time) int {
 	return max(0, int(now.Sub(at)/time.Second))
 }
 
+// lastSeenText is the "N S AGO" caption, or "-- S AGO" when never seen.
+func lastSeenText(at, now time.Time) string {
+	if at.IsZero() {
+		return "-- S AGO"
+	}
+	return fmt.Sprintf("%d S AGO", secondsAgo(at, now))
+}
+
 func (u *ui) renderBTTrack(img *image.RGBA, s Snapshot, now time.Time) {
 	t := s.BTTrack
 	if t == nil {
@@ -325,7 +333,7 @@ func (u *ui) renderBTTrack(img *image.RGBA, s Snapshot, now time.Time) {
 	drawText(img, 142, 132, kl, white, true, 1)
 	drawTextBox(img, image.Rect(190, 132, 476, 148), 190, 132, trimCells(kv, 35), cyan, true, 1)
 	drawText(img, 142, 150, "SEEN", white, true, 1)
-	drawTextBox(img, image.Rect(190, 150, 476, 166), 190, 150, fmt.Sprintf("%d S AGO", secondsAgo(t.LastSeen, now)), cyan, true, 1)
+	drawTextBox(img, image.Rect(190, 150, 476, 166), 190, 150, lastSeenText(t.LastSeen, now), cyan, true, 1)
 	drawTextBox(img, image.Rect(142, 176, 476, 192), 142, 176, trimCells("HITS WI-FI CH "+FormatChannelRuns(HitsWiFi()), 41), dim, true, 1)
 	renderFooter(img, hint{"B", "BACK"}, "LEFT/RIGHT DEV", "UP AUDIO", hint{"A", "MARK SPOT"})
 }
