@@ -33,6 +33,19 @@ DEFCON_DEFENSE_INSTALL_DIR="$ROOT/src/user/general/DEFCON_DEFENSE"
 export DEFCON_DEFENSE_SOURCE_ONLY DEFCON_DEFENSE_LOOT_DIR DEFCON_DEFENSE_PCAP_DIR DEFCON_DEFENSE_INSTALL_DIR
 . "$ROOT/src/user/general/DEFCON_DEFENSE/payload.sh"
 
+# Pager 24.10.1 does not reliably support `pgrep -x`. The exact pidof path
+# must report the firmware UI state without falling back to fuzzy matching.
+(pidof() { [ "$1" = "pineapple" ]; }; pager_firmware_ui_running)
+assert_rc "$?" "0" "firmware UI helper accepts the Pager pidof match"
+(pidof() { return 1; }; pager_firmware_ui_running)
+assert_rc "$?" "1" "firmware UI helper rejects an absent Pager process"
+
+# Synthetic fixtures below use small deterministic epochs. Disable runtime
+# freshness gates for the existing alert-flow assertions; dedicated guard
+# tests exercise stale-cache and restart replay behavior.
+RECON_OBSERVATION_MAX_AGE=0
+MONITOR_SESSION_EPOCH=0
+
 assert_eq "$DIR" "$DEFCON_DEFENSE_INSTALL_DIR" "unified payload prefers stable installed directory"
 assert_eq "$(signal_indicator -45)" "green|EXCELLENT|[##########]" \
   "live status maps excellent signal strength"
@@ -42,6 +55,16 @@ assert_eq "$(threat_label_for TRUSTED_SSID_NEW_BSSID 0)" "POSSIBLE EVIL TWIN / N
   "threat page gives identity anomalies a readable label"
 assert_eq "$(threat_label_for NONE 4)" "DEAUTH/DISASSOC: 4 events in 2 min" \
   "threat page labels active deauth traffic"
+
+UI_HTTP_TOKEN_FILE="$TMP/ui-http-token"
+UI_HTTP_TOKEN=""
+ensure_ui_http_token
+token_shape_rc=1
+[ "$(wc -c < "$UI_HTTP_TOKEN_FILE" | tr -d ' ')" = "33" ] && \
+  grep -Eq '^[0-9a-f]{32}$' "$UI_HTTP_TOKEN_FILE" && token_shape_rc=0
+assert_rc "$token_shape_rc" "0" "Virtual Pager access token is random-looking and newline terminated"
+assert_eq "$(ls -l "$UI_HTTP_TOKEN_FILE" | cut -c1-10)" "-rw-------" \
+  "Virtual Pager access token is owner-readable only"
 
 # Foreground UI refresh and the background monitor may read Recon at the same
 # time. Their staging paths must not collide even though Bash keeps $$ stable in
@@ -55,10 +78,37 @@ wait "$capture_two"; capture_two_rc=$?
 assert_rc "$capture_one_rc" "0" "foreground Recon refresh completes during concurrent refresh"
 assert_rc "$capture_two_rc" "0" "background Recon refresh completes without temp-file collision"
 
+_pineap() { sleep 2; printf '[]\n'; }
+RECON_COMMAND_TIMEOUT=0.1
+capture_recon_json "$TMP/timed-recon.json"; timed_recon_rc=$?
+assert_rc "$timed_recon_rc" "124" "stalled PineAP Recon is terminated by the bounded watchdog"
+[ ! -e "$TMP/timed-recon.json.timeout" ]; assert_rc "$?" "0" "Recon timeout marker is cleaned after recovery"
+RECON_COMMAND_TIMEOUT=8
+
+# Backend and action workers are Bash subshells, so $$ alone is not a unique
+# atomic-state filename. Concurrent writes must leave one complete state and no
+# shared staging file behind.
+(
+  rf_count_band() { echo 0; }
+  rf_build_threat_snapshot() { : > "$6"; }
+  rf_watch_count() { echo 0; }
+  pcap_evidence_import_existing() { return 0; }
+  write_custom_ui_state ACTIVE 100 0 & state_one=$!
+  write_custom_ui_state DEGRADED 90 1 & state_two=$!
+  wait "$state_one"; state_one_rc=$?
+  wait "$state_two"; state_two_rc=$?
+  assert_rc "$state_one_rc" "0" "monitor worker state write completes during action write"
+  assert_rc "$state_two_rc" "0" "action worker state write completes without temp-file collision"
+  assert_eq "$(awk -F= '$1=="version" {print $2}' "$UI_STATE")" "4" "concurrent state writes leave a complete schema"
+  state_temp_count="$(find "$LOOT_DIR" -name 'ui_state.psv.tmp.*' | wc -l | tr -d ' ')"
+  assert_eq "$state_temp_count" "0" "concurrent state writes leave no shared staging file"
+)
+
 # The selected general-screen design keeps monitoring, threats, and PCAP
 # evidence in the first three native list rows.
 GENERAL_REC="$TMP/general-screen"
 : > "$GENERAL_REC"
+(
 set_recon_bands() { return 0; }
 start_background_monitor() { BACKGROUND_MONITOR_PID=12345; }
 background_monitor_status() { echo "ACTIVE"; }
@@ -76,7 +126,8 @@ LIST_PICKER() {
   printf '%s\n' "$@" > "$GENERAL_REC"
   echo "Exit DEFCON Defense"
 }
-( general_screen )
+general_screen
+)
 assert_eq "$(sed -n '2p' "$GENERAL_REC")" "Live RF | ACTIVE | 54 AP" \
   "general screen leads with live monitoring state"
 assert_eq "$(sed -n '3p' "$GENERAL_REC")" "Threat Details | CLEAR" \
@@ -188,5 +239,45 @@ assert_eq "$(awk -F '\t' '$1=="ALERT" {count++} END {print count+0}' "$REC")" "1
   "selected-network monitoring alerts without a baseline after repeat confirmation"
 assert_eq "$(awk -F '\t' 'NR==2 {print $2}' "$FINDINGS")" "WATCHED_SSID_NEW_BSSID" \
   "baseline-free watched-network evidence is classified"
+
+# The native UI action queue can add an AP selected from observed Recon traffic
+# and can remove an entry from the user's saved watch list.
+(
+write_custom_ui_state() { return 0; }
+printf '%s\n' 'WATCH|ADD|Observed-AP|AA:BB:CC:DD:EE:77|5GHz|44|-57' > "$UI_ACTION"
+process_custom_ui_action
+assert_rc "$?" "0" "native observed-AP selection action is processed"
+rf_watch_contains "$WATCHED_APS" 'AA:BB:CC:DD:EE:77'
+assert_rc "$?" "0" "observed AP selection is saved in the user watch list"
+
+printf '%s\n' 'WATCH|REMOVE|Observed-AP|AA:BB:CC:DD:EE:77|5GHz|44|-57' > "$UI_ACTION"
+process_custom_ui_action
+assert_rc "$?" "0" "native saved-list removal action is processed"
+if rf_watch_contains "$WATCHED_APS" 'AA:BB:CC:DD:EE:77'; then removed_rc=1; else removed_rc=0; fi
+assert_rc "$removed_rc" "0" "saved AP can be removed from the user watch list"
+)
+
+# The fourth custom-UI option clears the current alert/evidence session while
+# preserving monitoring configuration for the next session.
+printf 'finding\n' > "$FINDINGS"
+printf 'alert-state\n' > "$ALERT_STATE"
+printf 'threat\n' > "$LOOT_DIR/latest_threats.tsv"
+printf 'recon\n' > "$RECON_JSON"
+printf 'deauth\n' > "$DEAUTH_EVENTS"
+printf 'baseline\n' > "$BASELINE"
+watch_before="$(cat "$WATCHED_APS")"
+trusted_before="$(cat "$TRUSTED_APS")"
+printf 'session-pcap\n' > "$PCAP_DIR/session-clear-test.pcap"
+printf 'CLEAR_SESSION\n' > "$UI_ACTION"
+process_custom_ui_action
+
+for cleared in "$FINDINGS" "$ALERT_STATE" "$LOOT_DIR/latest_threats.tsv" \
+  "$SNAPSHOT" "$RECON_JSON" "$DEAUTH_EVENTS" "$PCAP_DIR/session-clear-test.pcap"; do
+  [ ! -e "$cleared" ]; assert_rc "$?" "0" "clear-session removes $(basename "$cleared")"
+done
+assert_eq "$(pcap_evidence_count)" "0" "clear-session resets captured PCAP evidence"
+assert_eq "$(cat "$WATCHED_APS")" "$watch_before" "clear-session preserves monitored networks"
+assert_eq "$(cat "$TRUSTED_APS")" "$trusted_before" "clear-session preserves trusted rules"
+assert_eq "$(cat "$BASELINE")" "baseline" "clear-session preserves the reviewed baseline"
 
 exit "$FAIL"

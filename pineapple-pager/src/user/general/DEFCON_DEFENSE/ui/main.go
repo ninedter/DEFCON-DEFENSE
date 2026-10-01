@@ -11,7 +11,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
-	"encoding/csv"
 	"errors"
 	"flag"
 	"fmt"
@@ -33,7 +32,6 @@ import (
 
 	"golang.org/x/image/font"
 	"golang.org/x/image/font/inconsolata"
-	"golang.org/x/image/font/opentype"
 	"golang.org/x/image/math/fixed"
 )
 
@@ -47,8 +45,18 @@ const (
 
 	frameRowBytes         = fbWidth * 2
 	ownershipSampleBytes  = 512
-	ownershipPollInterval = 50 * time.Millisecond
-	inputStartupDelay     = 1200 * time.Millisecond
+	ownershipPollInterval = 250 * time.Millisecond
+	ownershipGuardWindow  = 8 * time.Second
+	inputStartupDelay     = 250 * time.Millisecond
+	inputReadTimeout      = 250 * time.Millisecond
+	inputRetryDelay       = 500 * time.Millisecond
+	inputDeviceLease      = 10 * time.Minute
+	screenLongPollTimeout = 5 * time.Second
+	monitorStaleAfter     = 45 * time.Second
+	maxObservedAPs        = 256
+	maxThreats            = 128
+	maxWatchedAPs         = 256
+	maxEvidenceRows       = 100
 
 	passiveCaptureLabel   = "PASSIVE CAPTURE:"
 	passiveCaptureLabelX  = 244
@@ -71,12 +79,19 @@ type screenKind int
 const (
 	screenGeneral screenKind = iota
 	screenThreat
+	screenAPWatch
+	screenWatchList
 	screenEvidence
 	screenEvidenceDetail
+	screenClearSession
 )
 
 type AP struct {
 	BSSID, SSID, Channel, Frequency, Signal, Seen, Packets, Band string
+}
+
+type WatchedAP struct {
+	BSSID, SSID, Channel, Band string
 }
 
 type Threat struct {
@@ -104,24 +119,35 @@ type liveState struct {
 	Evidence     []Evidence
 	Capture      Capture
 	Watched      int
+	WatchList    []WatchedAP
+	WatchedAPs   map[string]bool
 	UsedBytes    int64
 	StorageMax   int64
 }
 
-type renderer struct {
-	material map[int]font.Face
+type renderer struct{}
+
+type fileStamp struct {
+	size    int64
+	mtime   int64
+	present bool
 }
+
+type stateFingerprint [4]fileStamp
 
 type app struct {
 	dataDir, pcapDir, actionFile, muteFile string
 	framebuffer, previewDir                string
 	inputDevice, readyFile                 string
-	virtualListen                          string
+	virtualListen, virtualTokenFile        string
+	portalListen, portalRoot               string
+	virtualToken                           string
 	preview                                bool
 	renderer                               *renderer
 	webMu                                  sync.RWMutex
 	webPNG                                 []byte
 	webETag                                string
+	webSession                             string
 	webRevision                            uint64
 	webUpdated                             chan struct{}
 
@@ -129,6 +155,8 @@ type app struct {
 	screen           screenKind
 	generalSelected  int
 	threatSelected   int
+	apSelected       int
+	watchSelected    int
 	evidenceSelected int
 	evidencePage     int
 	muted            bool
@@ -136,12 +164,15 @@ type app struct {
 	toastUntil       time.Time
 	lastButton       string
 	lastButtonAt     time.Time
+	clearArmedUntil  time.Time
 	displayedFrame   []byte
+	frameScratch     []byte
+	canvas           *image.RGBA
 }
 
 func main() {
 	var materialPath string
-	a := &app{webUpdated: make(chan struct{})}
+	a := &app{webUpdated: make(chan struct{}), webSession: newWebSession()}
 	flag.StringVar(&a.dataDir, "data-dir", "/root/loot/defcon_defense", "DEFCON Defense state directory")
 	flag.StringVar(&a.pcapDir, "pcap-dir", "/root/loot/pcap", "managed PCAP directory")
 	flag.StringVar(&a.actionFile, "action-file", "", "action queue file")
@@ -149,8 +180,11 @@ func main() {
 	flag.StringVar(&a.framebuffer, "framebuffer", "/dev/fb0", "Pager framebuffer")
 	flag.StringVar(&a.inputDevice, "input-device", "/dev/input/event0", "Pager evdev button device")
 	flag.StringVar(&a.readyFile, "ready-file", "", "write after the first physical and Virtual Pager frames are ready")
-	flag.StringVar(&a.previewDir, "preview-dir", "", "render the three reference states as PNG files")
-	flag.StringVar(&a.virtualListen, "virtual-listen", ":1472", "Virtual Pager bridge listen address")
+	flag.StringVar(&a.previewDir, "preview-dir", "", "render the reference states as PNG files")
+	flag.StringVar(&a.virtualListen, "virtual-listen", "172.16.52.1:1472", "Virtual Pager bridge listen address")
+	flag.StringVar(&a.virtualTokenFile, "virtual-token-file", "", "file containing the Virtual Pager access token")
+	flag.StringVar(&a.portalListen, "portal-listen", "172.16.52.1:1471", "Virtual Pager static portal listen address")
+	flag.StringVar(&a.portalRoot, "portal-root", "/pineapple/ui", "Virtual Pager static portal root")
 	flag.StringVar(&materialPath, "material-font", "/pineapple/ui/MaterialIcons-Regular.ttf", "Material Icons font path")
 	flag.BoolVar(&a.preview, "preview", false, "use deterministic reference data")
 	flag.Parse()
@@ -160,6 +194,11 @@ func main() {
 	}
 	if a.muteFile == "" {
 		a.muteFile = filepath.Join(a.dataDir, "ui_muted")
+	}
+	if a.virtualTokenFile != "" {
+		if token, err := os.ReadFile(a.virtualTokenFile); err == nil {
+			a.virtualToken = strings.TrimSpace(string(token))
+		}
 	}
 	a.renderer = newRenderer(materialPath)
 
@@ -176,23 +215,16 @@ func main() {
 	}
 }
 
+func newWebSession() string {
+	return fmt.Sprintf("%x-%x", time.Now().UnixNano(), os.Getpid())
+}
+
 func newRenderer(materialPath string) *renderer {
-	r := &renderer{material: map[int]font.Face{}}
-	b, err := os.ReadFile(materialPath)
-	if err != nil {
-		return r
-	}
-	f, err := opentype.Parse(b)
-	if err != nil {
-		return r
-	}
-	for _, size := range []int{12, 14, 16, 18, 20, 24, 28} {
-		face, faceErr := opentype.NewFace(f, &opentype.FaceOptions{Size: float64(size), DPI: 72, Hinting: font.HintingFull})
-		if faceErr == nil {
-			r.material[size] = face
-		}
-	}
-	return r
+	// Keep the flag for command-line compatibility with older launchers. Icons
+	// are drawn from the bundled bitmap face now, avoiding a multi-megabyte
+	// TrueType parser and font allocation on the 256 MB Pager.
+	_ = materialPath
+	return &renderer{}
 }
 
 func (a *app) renderPreviews() error {
@@ -207,6 +239,11 @@ func (a *app) renderPreviews() error {
 	emptyEvidenceState := clearState
 	emptyEvidenceState.Evidence = nil
 	emptyEvidenceState.UsedBytes = 0
+	emptyAPState := clearState
+	emptyAPState.APs = nil
+	emptyAPState.WatchList = nil
+	emptyAPState.WatchedAPs = map[string]bool{}
+	emptyAPState.Watched = 0
 
 	stressState := previewState()
 	stressState.Monitoring = "RECONNECTING TO MONITOR SERVICE"
@@ -235,6 +272,12 @@ func (a *app) renderPreviews() error {
 		{"09-stress-evidence.png", screenEvidence, stressState, ""},
 		{"10-stress-evidence-detail.png", screenEvidenceDetail, stressState, ""},
 		{"11-stress-toast.png", screenGeneral, stressState, "A VERY LONG OPERATOR MESSAGE THAT MUST REMAIN INSIDE THE TOAST PANEL WITHOUT OVERLAP"},
+		{"12-ap-watch-list.png", screenAPWatch, state, ""},
+		{"13-stress-ap-watch-list.png", screenAPWatch, stressState, ""},
+		{"14-my-watch-list.png", screenWatchList, state, ""},
+		{"15-observed-aps-empty.png", screenAPWatch, emptyAPState, ""},
+		{"16-my-watch-list-empty.png", screenWatchList, emptyAPState, ""},
+		{"17-clear-session.png", screenClearSession, state, ""},
 	}
 	for _, view := range views {
 		a.screen = view.screen
@@ -277,6 +320,9 @@ func (a *app) run() error {
 	if a.virtualListen != "" {
 		go a.serveVirtualPager(ctx, buttons)
 	}
+	if a.portalListen != "" && a.portalRoot != "" {
+		go a.servePortal(ctx)
+	}
 	go func() {
 		// The A press that confirms the native payload launch can still be in the
 		// Pager service's input path when this process opens evdev. Let that launch
@@ -294,14 +340,19 @@ func (a *app) run() error {
 	stateTicker := time.NewTicker(time.Second)
 	defer stateTicker.Stop()
 	ownershipTicker := time.NewTicker(ownershipPollInterval)
-	defer ownershipTicker.Stop()
+	ownershipDeadline := time.NewTimer(ownershipGuardWindow)
+	ownershipC := ownershipTicker.C
+	ownershipDeadlineC := ownershipDeadline.C
+	defer func() {
+		ownershipTicker.Stop()
+		ownershipDeadline.Stop()
+	}()
 
 	state := a.loadState()
 	stateFingerprint := a.stateFingerprint()
 	displayedMinute := state.Now.Format("15:04")
-	var displayedPixels []byte
 	var framebufferScratch []byte
-	if err := a.updateDisplay(fb, state, &displayedPixels); err != nil {
+	if err := a.updateDisplay(fb, state); err != nil {
 		return err
 	}
 	if a.readyFile != "" {
@@ -318,7 +369,7 @@ func (a *app) run() error {
 			if a.handleButton(button, state) {
 				return nil
 			}
-			if err := a.updateDisplay(fb, state, &displayedPixels); err != nil {
+			if err := a.updateDisplay(fb, state); err != nil {
 				return err
 			}
 		case <-stateTicker.C:
@@ -333,45 +384,87 @@ func (a *app) run() error {
 				state.Now = now
 			}
 			if stateChanged || minuteChanged || a.timedRefreshNeeded(state, now) {
-				if err := a.updateDisplay(fb, state, &displayedPixels); err != nil {
+				if err := a.updateDisplay(fb, state); err != nil {
 					return err
 				}
 				displayedMinute = state.Now.Format("15:04")
 			}
-		case <-ownershipTicker.C:
+		case <-ownershipDeadlineC:
+			// The stock payload renderer can only race us during the launch
+			// transition. It is already stopped before this process starts, so
+			// continuing framebuffer reads forever just adds I/O to a long-lived
+			// session and puts that I/O in the main input/render event loop.
+			ownershipTicker.Stop()
+			ownershipC = nil
+			ownershipDeadlineC = nil
+		case <-ownershipC:
 			// The native payload runner paints its completion screen after this
 			// application starts. Reclaim the display only when that renderer (or
 			// another process) has displaced our already-rendered RGB565 frame.
+			// A failed probe disables this startup-only guard instead of freezing
+			// or terminating the operator interface.
 			if err := maintainDisplayOwnership(fb, a.displayedFrame, &framebufferScratch); err != nil {
-				return err
+				ownershipTicker.Stop()
+				ownershipC = nil
 			}
 		}
 	}
 }
 
-func (a *app) stateFingerprint() string {
+func portalHandler(root string) http.Handler {
+	files := http.FileServer(http.Dir(root))
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("Referrer-Policy", "no-referrer")
+		if r.URL.Path == "/" || r.URL.Path == "/index.html" {
+			w.Header().Set("Cache-Control", "no-store")
+			http.ServeFile(w, r, filepath.Join(root, "index.html"))
+			return
+		}
+		// The bridge needs static files, never filesystem directory indexes.
+		if strings.HasSuffix(r.URL.Path, "/") {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Cache-Control", "public, max-age=3600")
+		files.ServeHTTP(w, r)
+	})
+}
+
+func (a *app) servePortal(ctx context.Context) {
+	server := &http.Server{
+		Addr:              a.portalListen,
+		Handler:           portalHandler(a.portalRoot),
+		ReadHeaderTimeout: 2 * time.Second,
+		WriteTimeout:      10 * time.Second,
+		IdleTimeout:       15 * time.Second,
+		MaxHeaderBytes:    8 << 10,
+	}
+	go func() {
+		<-ctx.Done()
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		_ = server.Shutdown(shutdownCtx)
+	}()
+	_ = server.ListenAndServe()
+}
+
+func (a *app) stateFingerprint() stateFingerprint {
 	paths := []string{
 		filepath.Join(a.dataDir, "ui_state.psv"),
-		filepath.Join(a.dataDir, "latest_snapshot.tsv"),
-		filepath.Join(a.dataDir, "latest_threats.tsv"),
 		filepath.Join(a.dataDir, "pcap_index.tsv"),
 		filepath.Join(a.dataDir, "pcap_capture.psv"),
-		filepath.Join(a.dataDir, "watched_aps.tsv"),
 		a.muteFile,
 	}
-	var fingerprint strings.Builder
-	for _, path := range paths {
+	var fingerprint stateFingerprint
+	for i, path := range paths {
 		info, err := os.Stat(path)
 		if err != nil {
-			fingerprint.WriteString("missing|")
 			continue
 		}
-		fingerprint.WriteString(strconv.FormatInt(info.Size(), 10))
-		fingerprint.WriteByte(':')
-		fingerprint.WriteString(strconv.FormatInt(info.ModTime().UnixNano(), 10))
-		fingerprint.WriteByte('|')
+		fingerprint[i] = fileStamp{size: info.Size(), mtime: info.ModTime().UnixNano(), present: true}
 	}
-	return fingerprint.String()
+	return fingerprint
 }
 
 func (a *app) timedRefreshNeeded(state liveState, now time.Time) bool {
@@ -386,17 +479,17 @@ func (a *app) timedRefreshNeeded(state liveState, now time.Time) bool {
 	return state.Capture.Status == "CAPTURING"
 }
 
-func (a *app) updateDisplay(fb io.WriteSeeker, state liveState, displayedPixels *[]byte) error {
+func (a *app) updateDisplay(fb io.WriteSeeker, state liveState) error {
 	canvas := a.render(state)
-	if bytes.Equal(*displayedPixels, canvas.Pix) {
+	frame := canvasToFramebufferInto(canvas, a.frameScratch)
+	if bytes.Equal(a.displayedFrame, frame) {
+		a.frameScratch = frame
 		return nil
 	}
-	*displayedPixels = append((*displayedPixels)[:0], canvas.Pix...)
-	frame := canvasToFramebuffer(canvas)
 	if err := writeFramebuffer(fb, frame); err != nil {
 		return err
 	}
-	a.displayedFrame = append(a.displayedFrame[:0], frame...)
+	a.displayedFrame, a.frameScratch = frame, a.displayedFrame
 	// The physical display is the operator's primary surface. Commit it before
 	// encoding the Virtual Pager image so a slow CPU can never strand the user
 	// on the stock Payload Running/Complete screen.
@@ -452,10 +545,18 @@ func (a *app) publishPNG(img image.Image) {
 	if encoder.Encode(&b, img) != nil {
 		return
 	}
+	// Each published byte slice is immutable. Screen handlers can therefore
+	// retain the current slice after releasing webMu instead of allocating and
+	// copying a 320 KB PNG on every long-poll response. The old slice remains
+	// alive naturally until its final in-flight writer completes.
+	encoded := b.Bytes()
 	a.webMu.Lock()
-	a.webPNG = append(a.webPNG[:0], b.Bytes()...)
+	if a.webSession == "" {
+		a.webSession = newWebSession()
+	}
+	a.webPNG = encoded
 	a.webRevision++
-	a.webETag = fmt.Sprintf("\"defcon-%x\"", a.webRevision)
+	a.webETag = fmt.Sprintf("\"defcon-%s-%x\"", a.webSession, a.webRevision)
 	if a.webUpdated != nil {
 		close(a.webUpdated)
 	}
@@ -465,6 +566,7 @@ func (a *app) publishPNG(img image.Image) {
 
 func (a *app) serveVirtualPager(ctx context.Context, buttons chan<- string) {
 	mux := http.NewServeMux()
+	screenClients := make(chan struct{}, 4)
 	mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Cache-Control", "no-store")
@@ -472,6 +574,17 @@ func (a *app) serveVirtualPager(ctx context.Context, buttons chan<- string) {
 		_, _ = io.WriteString(w, "DEFCON Defense UI active\n")
 	})
 	mux.HandleFunc("/screen.png", func(w http.ResponseWriter, r *http.Request) {
+		if !virtualRequestAuthorized(r, a.virtualToken) {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		select {
+		case screenClients <- struct{}{}:
+			defer func() { <-screenClients }()
+		default:
+			http.Error(w, "too many screen clients", http.StatusServiceUnavailable)
+			return
+		}
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Access-Control-Expose-Headers", "ETag")
 		w.Header().Set("Cache-Control", "no-cache")
@@ -485,7 +598,7 @@ func (a *app) serveVirtualPager(ctx context.Context, buttons chan<- string) {
 			etag := a.webETag
 			updated := a.webUpdated
 			if etag == "" || clientETag != etag {
-				b := append([]byte(nil), a.webPNG...)
+				b := a.webPNG
 				a.webMu.RUnlock()
 				if len(b) == 0 {
 					http.Error(w, "screen not ready", http.StatusServiceUnavailable)
@@ -497,7 +610,7 @@ func (a *app) serveVirtualPager(ctx context.Context, buttons chan<- string) {
 			}
 			a.webMu.RUnlock()
 			if r.URL.Query().Get("wait") == "1" && updated != nil {
-				timer := time.NewTimer(5 * time.Second)
+				timer := time.NewTimer(screenLongPollTimeout)
 				select {
 				case <-updated:
 					timer.Stop()
@@ -513,8 +626,15 @@ func (a *app) serveVirtualPager(ctx context.Context, buttons chan<- string) {
 			return
 		}
 	})
-	mux.HandleFunc("/button", virtualButtonHandler(buttons))
-	server := &http.Server{Addr: a.virtualListen, Handler: mux, ReadHeaderTimeout: 2 * time.Second}
+	mux.HandleFunc("/button", virtualButtonHandler(buttons, a.virtualToken))
+	server := &http.Server{
+		Addr:              a.virtualListen,
+		Handler:           mux,
+		ReadHeaderTimeout: 2 * time.Second,
+		WriteTimeout:      screenLongPollTimeout + 3*time.Second,
+		IdleTimeout:       15 * time.Second,
+		MaxHeaderBytes:    8 << 10,
+	}
 	go func() {
 		<-ctx.Done()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -524,7 +644,11 @@ func (a *app) serveVirtualPager(ctx context.Context, buttons chan<- string) {
 	_ = server.ListenAndServe()
 }
 
-func virtualButtonHandler(buttons chan<- string) http.HandlerFunc {
+func virtualRequestAuthorized(r *http.Request, token string) bool {
+	return token != "" && r.URL.Query().Get("token") == token
+}
+
+func virtualButtonHandler(buttons chan<- string, token string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
@@ -535,6 +659,10 @@ func virtualButtonHandler(buttons chan<- string) http.HandlerFunc {
 		}
 		if r.Method != http.MethodPost {
 			http.Error(w, "POST required", http.StatusMethodNotAllowed)
+			return
+		}
+		if !virtualRequestAuthorized(r, token) {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
 		button := normalizeButton(r.URL.Query().Get("name"))
@@ -555,12 +683,14 @@ func virtualButtonHandler(buttons chan<- string) http.HandlerFunc {
 
 func readButtons(ctx context.Context, inputDevice string, out chan<- string) {
 	for ctx.Err() == nil {
-		if err := readButtonDevice(ctx, inputDevice, out); ctx.Err() != nil {
+		err := readButtonDevice(ctx, inputDevice, out)
+		if ctx.Err() != nil {
 			return
-		} else if err == nil {
+		}
+		if err == nil || errors.Is(err, errInputLeaseExpired) {
 			continue
 		}
-		timer := time.NewTimer(2 * time.Second)
+		timer := time.NewTimer(inputRetryDelay)
 		select {
 		case <-timer.C:
 		case <-ctx.Done():
@@ -576,16 +706,16 @@ func readButtonDevice(ctx context.Context, inputDevice string, out chan<- string
 		return err
 	}
 	defer f.Close()
+	return readButtonFile(ctx, f, out, time.Now())
+}
 
-	done := make(chan struct{})
-	defer close(done)
-	go func() {
-		select {
-		case <-ctx.Done():
-			_ = f.Close()
-		case <-done:
-		}
-	}()
+var errInputLeaseExpired = errors.New("input device lease expired")
+
+func readButtonFile(ctx context.Context, f *os.File, out chan<- string, openedAt time.Time) error {
+	fd := int(f.Fd())
+	if err := syscall.SetNonblock(fd, true); err != nil {
+		return fmt.Errorf("set input nonblocking: %w", err)
+	}
 
 	// Linux input_event is 16 bytes on the Pager's 32-bit MIPS userspace and
 	// 24 bytes on a 64-bit test host because timeval follows native word size.
@@ -594,10 +724,28 @@ func readButtonDevice(ctx context.Context, inputDevice string, out chan<- string
 		eventSize, typeOffset = 24, 16
 	}
 	event := make([]byte, eventSize)
+	offset := 0
 	for {
-		if _, err := io.ReadFull(f, event); err != nil {
+		if err := waitForInput(ctx, fd, openedAt); err != nil {
 			return err
 		}
+		n, readErr := syscall.Read(fd, event[offset:])
+		if n > 0 {
+			offset += n
+		}
+		if readErr != nil {
+			if errors.Is(readErr, syscall.EINTR) || errors.Is(readErr, syscall.EAGAIN) || errors.Is(readErr, syscall.EWOULDBLOCK) {
+				continue
+			}
+			return readErr
+		}
+		if n == 0 {
+			return io.EOF
+		}
+		if offset < eventSize {
+			continue
+		}
+		offset = 0
 		eventType := binary.LittleEndian.Uint16(event[typeOffset : typeOffset+2])
 		code := binary.LittleEndian.Uint16(event[typeOffset+2 : typeOffset+4])
 		value := int32(binary.LittleEndian.Uint32(event[typeOffset+4 : typeOffset+8]))
@@ -616,12 +764,38 @@ func readButtonDevice(ctx context.Context, inputDevice string, out chan<- string
 	}
 }
 
+func waitForInput(ctx context.Context, fd int, openedAt time.Time) error {
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if time.Since(openedAt) >= inputDeviceLease {
+			return errInputLeaseExpired
+		}
+		var readSet syscall.FdSet
+		if !setFD(fd, &readSet) {
+			return fmt.Errorf("input descriptor %d exceeds select capacity", fd)
+		}
+		timeout := syscall.NsecToTimeval(inputReadTimeout.Nanoseconds())
+		ready, err := selectReadable(fd, &readSet, &timeout)
+		if err != nil {
+			if errors.Is(err, syscall.EINTR) {
+				continue
+			}
+			return err
+		}
+		if ready > 0 {
+			return nil
+		}
+	}
+}
+
 func buttonForLinuxKey(code uint16) string {
 	switch code {
-	case 304: // BTN_SOUTH
-		return "A"
-	case 305: // BTN_EAST
+	case 304: // BTN_SOUTH - physical red/B on the Pager
 		return "B"
+	case 305: // BTN_EAST - physical green/A on the Pager
+		return "A"
 	case 103: // KEY_UP
 		return "UP"
 	case 108: // KEY_DOWN
@@ -669,9 +843,9 @@ func (a *app) handleButton(button string, s liveState) (exit bool) {
 	case screenGeneral:
 		switch button {
 		case "UP":
-			a.generalSelected = (a.generalSelected + 2) % 3
+			a.generalSelected = (a.generalSelected + 3) % 4
 		case "DOWN":
-			a.generalSelected = (a.generalSelected + 1) % 3
+			a.generalSelected = (a.generalSelected + 1) % 4
 		case "LEFT", "RIGHT":
 			a.screen = screenEvidence
 		case "A":
@@ -679,11 +853,11 @@ func (a *app) handleButton(button string, s liveState) (exit bool) {
 			case 0:
 				a.screen = screenThreat
 			case 1:
-				a.toast = fmt.Sprintf("LIVE RF: %d NETWORKS SCANNING", len(s.APs))
-				a.toastUntil = now.Add(2 * time.Second)
+				a.screen = screenAPWatch
 			case 2:
-				a.toast = fmt.Sprintf("%d MONITORED NETWORKS", s.Watched)
-				a.toastUntil = now.Add(2 * time.Second)
+				a.screen = screenWatchList
+			case 3:
+				a.screen = screenClearSession
 			}
 		case "B":
 			return true
@@ -713,15 +887,71 @@ func (a *app) handleButton(button string, s liveState) (exit bool) {
 				a.toastUntil = now.Add(2 * time.Second)
 			}
 		case "B":
-			a.muted = !a.muted
-			if a.muted {
-				_ = os.WriteFile(a.muteFile, []byte("1\n"), 0o600)
-				a.toast = "THREAT AUDIO MUTED"
-			} else {
-				_ = os.Remove(a.muteFile)
-				a.toast = "THREAT AUDIO ACTIVE"
+			a.screen = screenGeneral
+		}
+	case screenAPWatch:
+		n := len(s.APs)
+		if n < 1 {
+			n = 1
+		}
+		switch button {
+		case "UP":
+			a.apSelected = (a.apSelected + n - 1) % n
+		case "DOWN":
+			a.apSelected = (a.apSelected + 1) % n
+		case "LEFT", "RIGHT":
+			if len(s.APs) > 3 {
+				pages := (len(s.APs) + 2) / 3
+				page := a.apSelected / 3
+				if button == "LEFT" {
+					page = (page + pages - 1) % pages
+				} else {
+					page = (page + 1) % pages
+				}
+				a.apSelected = page * 3
 			}
+		case "A":
+			if len(s.APs) == 0 {
+				a.toast = "NO AP OBSERVATIONS AVAILABLE"
+				a.toastUntil = now.Add(2 * time.Second)
+				break
+			}
+			ap := s.APs[a.apSelected%len(s.APs)]
+			operation := "ADD"
+			message := "WATCH REQUESTED"
+			if s.WatchedAPs[normalizeBSSID(ap.BSSID)] {
+				operation = "REMOVE"
+				message = "UNWATCH REQUESTED"
+			}
+			a.queueAction("WATCH", operation, ap.SSID, ap.BSSID, ap.Band, ap.Channel, ap.Signal)
+			a.toast = fmt.Sprintf("%s: %s", message, trimCells(displaySSID(ap.SSID), 28))
 			a.toastUntil = now.Add(2 * time.Second)
+		case "B":
+			a.screen = screenGeneral
+		}
+	case screenWatchList:
+		n := len(s.WatchList)
+		if n < 1 {
+			n = 1
+		}
+		switch button {
+		case "UP":
+			a.watchSelected = (a.watchSelected + n - 1) % n
+		case "DOWN":
+			a.watchSelected = (a.watchSelected + 1) % n
+		case "LEFT", "RIGHT":
+			a.screen = screenAPWatch
+		case "A":
+			if len(s.WatchList) == 0 {
+				a.screen = screenAPWatch
+				break
+			}
+			watched := s.WatchList[a.watchSelected%len(s.WatchList)]
+			a.queueAction("WATCH", "REMOVE", watched.SSID, watched.BSSID, watched.Band, watched.Channel, "")
+			a.toast = fmt.Sprintf("UNWATCH REQUESTED: %s", trimCells(displaySSID(watched.SSID), 26))
+			a.toastUntil = now.Add(2 * time.Second)
+		case "B":
+			a.screen = screenGeneral
 		}
 	case screenEvidence:
 		n := len(s.Evidence)
@@ -767,6 +997,31 @@ func (a *app) handleButton(button string, s liveState) (exit bool) {
 		case "B", "LEFT":
 			a.screen = screenEvidence
 		case "RIGHT":
+			a.screen = screenGeneral
+		}
+	case screenClearSession:
+		switch button {
+		case "A":
+			if !now.Before(a.clearArmedUntil) {
+				a.toast = "PRESS RIGHT TO ARM SESSION CLEAR"
+				a.toastUntil = now.Add(2 * time.Second)
+				break
+			}
+			a.queueAction("CLEAR_SESSION")
+			a.screen = screenGeneral
+			a.generalSelected = 0
+			a.threatSelected = 0
+			a.evidenceSelected = 0
+			a.evidencePage = 0
+			a.clearArmedUntil = time.Time{}
+			a.toast = "CLEARING ALERTS + PCAPS"
+			a.toastUntil = now.Add(2 * time.Second)
+		case "RIGHT":
+			a.clearArmedUntil = now.Add(3 * time.Second)
+			a.toast = "CLEAR ARMED: PRESS A WITHIN 3 SECONDS"
+			a.toastUntil = a.clearArmedUntil
+		case "B", "LEFT":
+			a.clearArmedUntil = time.Time{}
 			a.screen = screenGeneral
 		}
 	}
@@ -820,7 +1075,9 @@ func (a *app) loadState() liveState {
 	s.Threats = loadThreats(filepath.Join(a.dataDir, "latest_threats.tsv"))
 	s.Evidence = loadEvidence(filepath.Join(a.dataDir, "pcap_index.tsv"))
 	s.Capture = loadCapture(filepath.Join(a.dataDir, "pcap_capture.psv"))
-	s.Watched = countRows(filepath.Join(a.dataDir, "watched_aps.tsv"))
+	s.WatchList = loadWatchedAPs(filepath.Join(a.dataDir, "watched_aps.tsv"))
+	s.WatchedAPs = watchedAPSet(s.WatchList)
+	s.Watched = len(s.WatchList)
 	for _, e := range s.Evidence {
 		s.UsedBytes += e.Size
 	}
@@ -831,7 +1088,15 @@ func (a *app) loadState() liveState {
 func previewState() liveState {
 	now := time.Date(2026, 8, 10, 14, 32, 23, 0, time.Local)
 	return liveState{
-		Now: now, Battery: 83, Monitoring: "ACTIVE", Watched: 3,
+		Now: now, Battery: 83, Monitoring: "ACTIVE", Watched: 2,
+		WatchedAPs: map[string]bool{
+			"AA:BB:CC:DD:EE:FF": true,
+			"DE:AD:BE:EF:00:01": true,
+		},
+		WatchList: []WatchedAP{
+			{"AA:BB:CC:DD:EE:FF", "DEFCON-GUEST", "6", "2.4GHz"},
+			{"DE:AD:BE:EF:00:01", "CONFERENCE", "11", "2.4GHz"},
+		},
 		StorageMax: 512 * 1024 * 1024, UsedBytes: 48 * 1024 * 1024,
 		APs: []AP{
 			{"AA:BB:CC:DD:EE:FF", "DEFCON-GUEST", "6", "2437", "-41", "", "1522", "2.4GHz"},
@@ -852,7 +1117,7 @@ func previewState() liveState {
 }
 
 func loadAPs(path string) []AP {
-	rows := readTSV(path)
+	rows := readTSV(path, maxObservedAPs, false)
 	out := make([]AP, 0, len(rows))
 	for _, row := range rows {
 		if len(row) < 8 {
@@ -863,8 +1128,38 @@ func loadAPs(path string) []AP {
 	return out
 }
 
+func loadWatchedAPs(path string) []WatchedAP {
+	out := []WatchedAP{}
+	for _, row := range readTSV(path, maxWatchedAPs, false) {
+		if len(row) < 1 {
+			continue
+		}
+		for len(row) < 4 {
+			row = append(row, "")
+		}
+		if bssid := normalizeBSSID(row[0]); bssid != "" {
+			out = append(out, WatchedAP{bssid, row[1], row[2], row[3]})
+		}
+	}
+	return out
+}
+
+func watchedAPSet(watched []WatchedAP) map[string]bool {
+	out := make(map[string]bool, len(watched))
+	for _, ap := range watched {
+		if bssid := normalizeBSSID(ap.BSSID); bssid != "" {
+			out[bssid] = true
+		}
+	}
+	return out
+}
+
+func normalizeBSSID(bssid string) string {
+	return strings.ToUpper(strings.TrimSpace(bssid))
+}
+
 func loadThreats(path string) []Threat {
-	rows := readTSV(path)
+	rows := readTSV(path, maxThreats, false)
 	out := make([]Threat, 0, len(rows))
 	for _, row := range rows {
 		if len(row) < 9 || row[0] == "" {
@@ -879,7 +1174,7 @@ func loadThreats(path string) []Threat {
 }
 
 func loadEvidence(path string) []Evidence {
-	rows := readTSV(path)
+	rows := readTSV(path, maxEvidenceRows, true)
 	out := make([]Evidence, 0, len(rows))
 	for _, row := range rows {
 		if len(row) < 15 || row[0] == "epoch" || row[12] != "SAVED" {
@@ -909,19 +1204,37 @@ func loadCapture(path string) Capture {
 	return Capture{f[0], f[1], f[2], f[3], f[4], f[5], f[6], f[7], f[8], f[9], f[10], f[11], f[12]}
 }
 
-func readTSV(path string) [][]string {
+func readTSV(path string, maxRows int, keepLast bool) [][]string {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil
 	}
 	defer f.Close()
-	r := csv.NewReader(f)
-	r.Comma = '\t'
-	r.FieldsPerRecord = -1
-	r.LazyQuotes = true
-	rows, err := r.ReadAll()
-	if err != nil {
+	rows := make([][]string, 0, maxRows)
+	next := 0
+	wrapped := false
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		row := strings.Split(scanner.Text(), "\t")
+		if maxRows <= 0 || len(rows) < maxRows {
+			rows = append(rows, row)
+			continue
+		}
+		if !keepLast {
+			break
+		}
+		rows[next] = row
+		next = (next + 1) % maxRows
+		wrapped = true
+	}
+	if scanner.Err() != nil {
 		return nil
+	}
+	if wrapped && next != 0 {
+		ordered := make([][]string, 0, len(rows))
+		ordered = append(ordered, rows[next:]...)
+		ordered = append(ordered, rows[:next]...)
+		return ordered
 	}
 	return rows
 }
@@ -978,17 +1291,26 @@ func fileExists(path string) bool {
 }
 
 func (a *app) render(s liveState) *image.RGBA {
-	img := image.NewRGBA(image.Rect(0, 0, screenWidth, screenHeight))
+	if a.canvas == nil {
+		a.canvas = image.NewRGBA(image.Rect(0, 0, screenWidth, screenHeight))
+	}
+	img := a.canvas
 	draw.Draw(img, img.Bounds(), image.NewUniform(black), image.Point{}, draw.Src)
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	switch a.screen {
 	case screenThreat:
 		a.renderThreat(img, s)
+	case screenAPWatch:
+		a.renderAPWatch(img, s)
+	case screenWatchList:
+		a.renderWatchList(img, s)
 	case screenEvidence:
 		a.renderEvidence(img, s)
 	case screenEvidenceDetail:
 		a.renderEvidenceDetail(img, s)
+	case screenClearSession:
+		a.renderClearSession(img, s)
 	default:
 		a.renderGeneral(img, s)
 	}
@@ -1021,34 +1343,209 @@ func (a *app) renderGeneral(img *image.RGBA, s liveState) {
 	drawText(img, 12, 44, "THREAT STATE:", cyan, false, 1)
 	drawText(img, 145, 44, state, stateColor, true, 1)
 	drawText(img, 292, 44, "MONITORING:", cyan, false, 1)
-	drawTextBox(img, image.Rect(405, 40, 471, 62), 405, 44, trimCells(s.Monitoring, 8), green, true, 1)
+	monitoring, monitoringColor := effectiveMonitoring(s)
+	drawTextBox(img, image.Rect(405, 40, 471, 62), 405, 44, trimCells(monitoring, 8), monitoringColor, true, 1)
 	drawText(img, 12, 67, "BANDS:", cyan, false, 1)
 	drawText(img, 80, 67, "2.4 GHZ + 5 GHZ", green, true, 1)
 	hLine(img, 9, 471, 90, cyan2)
 
 	rows := []struct{ left, right string }{
 		{"1. Threats", fmt.Sprintf("%d active", len(s.Threats))},
-		{"2. Live RF", "Scanning"},
+		{"2. AP Watch List", fmt.Sprintf("%d discovered", len(s.APs))},
 		{"3. Monitored Networks", fmt.Sprintf("%d watched", s.Watched)},
+		{"4. Clear Session", "alerts + PCAPs"},
 	}
-	y := []int{95, 124, 151}
+	y := []int{93, 116, 139, 162}
 	for i, row := range rows {
 		fg := cyan
 		if i == a.generalSelected {
-			fill(img, image.Rect(9, y[i]-1, 471, y[i]+25), yellow)
+			fill(img, image.Rect(9, y[i]-1, 471, y[i]+21), yellow)
 			fg = black
-			drawText(img, 15, y[i]+3, ">", black, true, 1)
+			drawText(img, 15, y[i]+2, ">", black, true, 1)
 		}
-		drawText(img, 38, y[i]+3, row.left, fg, i == a.generalSelected, 1)
-		drawTextRightBox(img, image.Rect(320, y[i], 453, y[i]+22), y[i]+3, row.right, fg, i == a.generalSelected)
+		drawText(img, 38, y[i]+2, row.left, fg, i == a.generalSelected, 1)
+		drawTextRightBox(img, image.Rect(300, y[i], 453, y[i]+19), y[i]+2, row.right, fg, i == a.generalSelected)
 	}
 	hLine(img, 9, 471, 188, cyan2)
-	drawText(img, 14, 199, "A", green, true, 1)
-	drawText(img, 35, 199, "OPEN", white, true, 1)
-	drawText(img, 145, 199, "B", red, true, 1)
-	drawText(img, 165, 199, "EXIT", white, true, 1)
+	// Match the physical Pager: red B is left of green A.
+	drawText(img, 14, 199, "B", red, true, 1)
+	drawText(img, 35, 199, "EXIT", white, true, 1)
+	drawText(img, 145, 199, "A", green, true, 1)
+	drawText(img, 165, 199, "OPEN", white, true, 1)
 	drawText(img, 263, 199, "LEFT/RIGHT", yellow, true, 1)
 	drawText(img, 386, 199, "PAGE", white, true, 1)
+}
+
+func (a *app) renderClearSession(img *image.RGBA, s liveState) {
+	drawTextWide(img, 10, 8, "CLEAR SESSION", yellow, true)
+	a.drawStatus(img, s, 296)
+	hLine(img, 9, 471, 33, cyan2)
+
+	armed := time.Now().Before(a.clearArmedUntil)
+	if armed {
+		drawCentered(img, 48, "CLEAR ARMED - PRESS A NOW", red, true)
+	} else {
+		drawCentered(img, 48, "DELETION LOCKED - PRESS RIGHT TO ARM", yellow, true)
+	}
+	drawText(img, 38, 79, "THIS REMOVES:", cyan, true, 1)
+	drawText(img, 58, 102, "CURRENT ALERT HISTORY", white, true, 1)
+	drawText(img, 58, 124, "ALL MANAGED PCAP FILES", white, true, 1)
+	drawText(img, 38, 153, "WATCHED APS, BASELINE, AND TRUSTED RULES STAY SAVED", green, true, 1)
+
+	stroke(img, image.Rect(4, 188, 476, 219), 1, cyan2)
+	vLine(img, 112, 188, 219, cyan2)
+	vLine(img, 322, 188, 219, cyan2)
+	drawButtonHint(img, 14, 196, "B", "CANCEL", white)
+	if armed {
+		drawButtonHint(img, 128, 196, "A", "CONFIRM CLEAR", red)
+	} else {
+		drawButtonHint(img, 128, 196, "A", "LOCKED", dim)
+	}
+	drawTextBox(img, image.Rect(330, 189, 474, 218), 334, 197, "RIGHT ARM (3 SEC)", yellow, true, 1)
+}
+
+func (a *app) renderAPWatch(img *image.RGBA, s liveState) {
+	drawText(img, 10, 7, "OBSERVED APS", yellow, true, 1)
+	page, pages := 1, 1
+	if len(s.APs) > 0 {
+		if a.apSelected >= len(s.APs) {
+			a.apSelected = 0
+		}
+		pages = (len(s.APs) + 2) / 3
+		page = a.apSelected/3 + 1
+	}
+	total := fmt.Sprintf("%d SEEN | %d WATCHED | PAGE %d/%d", len(s.APs), s.Watched, page, pages)
+	drawTextRightBox(img, image.Rect(180, 4, 471, 25), 9, trimCells(total, 35), cyan, true)
+	hLine(img, 4, 476, 27, cyan2)
+	drawText(img, 12, 34, "STATE", cyan, true, 1)
+	drawText(img, 104, 34, "NETWORK / BSSID", cyan, true, 1)
+	drawText(img, 316, 34, "BAND / CH", cyan, true, 1)
+	drawText(img, 416, 34, "SIGNAL", cyan, true, 1)
+	hLine(img, 4, 476, 49, cyan2)
+
+	if len(s.APs) == 0 {
+		drawCentered(img, 84, "NO AP OBSERVATIONS YET", white, true)
+		drawCentered(img, 106, "WAIT FOR THE NEXT PASSIVE RECON UPDATE", cyan, false)
+		a.apSelected = 0
+	} else {
+		start := (page - 1) * 3
+		for row := 0; row < 3 && start+row < len(s.APs); row++ {
+			i := start + row
+			ap := s.APs[i]
+			y := 54 + row*37
+			selected := i == a.apSelected
+			fg := white
+			stateColor := dim
+			stateLabel := "AVAILABLE"
+			if s.WatchedAPs[normalizeBSSID(ap.BSSID)] {
+				stateColor = green
+				stateLabel = "WATCHED"
+			}
+			if selected {
+				fill(img, image.Rect(4, y-3, 476, y+30), yellow)
+				fg = black
+				stateColor = black
+				drawText(img, 8, y, ">", black, true, 1)
+			}
+			drawTextBox(img, image.Rect(24, y-2, 101, y+15), 25, y, stateLabel, stateColor, true, 1)
+			drawTextBox(img, image.Rect(104, y-2, 313, y+15), 104, y, trimCells(displaySSID(ap.SSID), 25), fg, true, 1)
+			drawTextBox(img, image.Rect(316, y-2, 412, y+15), 316, y, trimCells(ap.Band+" / "+ap.Channel, 11), fg, true, 1)
+			drawTextRightBox(img, image.Rect(416, y-2, 471, y+15), y, trimCells(ap.Signal+"dBm", 7), fg, true)
+			drawTextBox(img, image.Rect(104, y+14, 313, y+30), 104, y+15, trimCells(ap.BSSID, 22), fg, false, 1)
+		}
+	}
+
+	hLine(img, 4, 476, 165, cyan2)
+	drawText(img, 10, 172, "A TOGGLES PASSIVE MONITORING FOR THE SELECTED AP", green, true, 1)
+	stroke(img, image.Rect(4, 188, 476, 219), 1, cyan2)
+	for _, x := range []int{91, 255, 390} {
+		vLine(img, x, 188, 219, cyan2)
+	}
+	drawButtonHint(img, 12, 196, "B", "BACK", white)
+	drawButtonHint(img, 101, 196, "A", "WATCH / UNWATCH", white)
+	drawTextBox(img, image.Rect(262, 189, 388, 218), 265, 197, "UP/DOWN SELECT", white, true, 1)
+	drawTextBox(img, image.Rect(397, 189, 474, 218), 398, 197, "L/R PAGE", white, true, 1)
+}
+
+func (a *app) renderWatchList(img *image.RGBA, s liveState) {
+	drawText(img, 10, 7, "MY WATCH LIST", yellow, true, 1)
+	page, pages := 1, 1
+	if len(s.WatchList) > 0 {
+		if a.watchSelected >= len(s.WatchList) {
+			a.watchSelected = 0
+		}
+		pages = (len(s.WatchList) + 2) / 3
+		page = a.watchSelected/3 + 1
+	}
+	total := fmt.Sprintf("%d SAVED AP%s | PAGE %d/%d", len(s.WatchList), pluralS(len(s.WatchList)), page, pages)
+	drawTextRightBox(img, image.Rect(250, 4, 471, 25), 9, total, cyan, true)
+	hLine(img, 4, 476, 27, cyan2)
+	drawText(img, 12, 34, "NETWORK / BSSID", cyan, true, 1)
+	drawText(img, 318, 34, "BAND / CH", cyan, true, 1)
+	drawText(img, 424, 34, "STATE", cyan, true, 1)
+	hLine(img, 4, 476, 49, cyan2)
+
+	if len(s.WatchList) == 0 {
+		drawCentered(img, 81, "YOUR WATCH LIST IS EMPTY", white, true)
+		drawCentered(img, 104, "PRESS A OR RIGHT TO ADD FROM OBSERVED APS", green, true)
+		a.watchSelected = 0
+	} else {
+		start := (page - 1) * 3
+		for row := 0; row < 3 && start+row < len(s.WatchList); row++ {
+			i := start + row
+			ap := s.WatchList[i]
+			y := 54 + row*37
+			selected := i == a.watchSelected
+			fg := white
+			stateColor := green
+			if selected {
+				fill(img, image.Rect(4, y-3, 476, y+30), yellow)
+				fg = black
+				stateColor = black
+				drawText(img, 8, y, ">", black, true, 1)
+			}
+			drawTextBox(img, image.Rect(25, y-2, 314, y+15), 25, y, trimCells(displaySSID(ap.SSID), 34), fg, true, 1)
+			drawTextBox(img, image.Rect(318, y-2, 420, y+15), 318, y, trimCells(ap.Band+" / "+ap.Channel, 12), fg, true, 1)
+			drawTextBox(img, image.Rect(424, y-2, 474, y+15), 424, y, "ON", stateColor, true, 1)
+			drawTextBox(img, image.Rect(25, y+14, 314, y+30), 25, y+15, trimCells(ap.BSSID, 34), fg, false, 1)
+		}
+	}
+
+	hLine(img, 4, 476, 165, cyan2)
+	drawText(img, 10, 172, "EDIT SAVED APS OR ADD FROM CURRENT OBSERVATIONS", green, true, 1)
+	stroke(img, image.Rect(4, 188, 476, 219), 1, cyan2)
+	for _, x := range []int{91, 251, 388} {
+		vLine(img, x, 188, 219, cyan2)
+	}
+	drawButtonHint(img, 12, 196, "B", "BACK", white)
+	drawButtonHint(img, 101, 196, "A", "REMOVE", white)
+	drawTextBox(img, image.Rect(258, 189, 386, 218), 260, 197, "UP/DOWN SELECT", white, true, 1)
+	drawTextBox(img, image.Rect(395, 189, 474, 218), 396, 197, "RIGHT ADD", white, true, 1)
+}
+
+func pluralS(n int) string {
+	if n == 1 {
+		return ""
+	}
+	return "S"
+}
+
+func effectiveMonitoring(s liveState) (string, color.RGBA) {
+	status := strings.ToUpper(strings.TrimSpace(s.Monitoring))
+	if status == "" {
+		status = "STARTING"
+	}
+	if s.UpdatedEpoch > 0 && s.Now.Sub(time.Unix(s.UpdatedEpoch, 0)) > monitorStaleAfter {
+		status = "STALE"
+	}
+	switch status {
+	case "ACTIVE":
+		return status, green
+	case "DEGRADED", "STARTING", "STALE":
+		return status, yellow
+	default:
+		return status, red
+	}
 }
 
 func (a *app) renderThreat(img *image.RGBA, s liveState) {
@@ -1115,11 +1612,11 @@ func (a *app) renderThreat(img *image.RGBA, s liveState) {
 	a.renderer.drawIcon(img, passiveIconX, 156, "\ue1da", 16, green)
 
 	stroke(img, image.Rect(4, 173, 476, 202), 1, white)
-	for _, x := range []int{136, 225, 350} {
+	for _, x := range []int{94, 225, 350} {
 		vLine(img, x, 173, 202, white)
 	}
-	drawButtonHint(img, 12, 180, "A", "INVESTIGATE", cyan)
-	drawButtonHint(img, 145, 180, "B", "MUTE", cyan)
+	drawButtonHint(img, 12, 180, "B", "BACK", white)
+	drawButtonHint(img, 103, 180, "A", "INVESTIGATE", cyan)
 	a.renderer.drawIcon(img, 239, 178, "\ue5c4", 20, cyan)
 	drawText(img, 263, 181, "GENERAL", cyan, true, 1)
 	a.renderer.drawIcon(img, 360, 178, "\ue5c8", 20, cyan)
@@ -1176,14 +1673,15 @@ func (a *app) renderEvidence(img *image.RGBA, s liveState) {
 	hLine(img, 4, 476, 164, cyan2)
 	drawText(img, 11, 174, "DOWNLOAD VIA VIRTUAL PAGER", green, true, 1)
 	stroke(img, image.Rect(4, 190, 476, 219), 1, cyan2)
-	for _, x := range []int{86, 163, 241, 323, 402} {
+	for _, x := range []int{86, 170, 241, 323, 402} {
 		vLine(img, x, 190, 219, cyan2)
 	}
-	drawTextBox(img, image.Rect(5, 191, 85, 218), 9, 197, "A", green, true, 1)
-	drawTextBox(img, image.Rect(5, 191, 85, 218), 26, 197, "DETAILS", white, true, 1)
-	drawButtonHint(img, 94, 197, "B", "BACK", white)
-	a.renderer.drawIcon(img, 171, 195, "\ue5c4", 18, cyan)
-	drawText(img, 194, 198, "PAGE", white, true, 1)
+	drawTextBox(img, image.Rect(5, 191, 85, 218), 9, 197, "B", red, true, 1)
+	drawTextBox(img, image.Rect(5, 191, 85, 218), 26, 197, "BACK", white, true, 1)
+	drawTextBox(img, image.Rect(87, 191, 169, 218), 91, 197, "A", green, true, 1)
+	drawTextBox(img, image.Rect(87, 191, 169, 218), 108, 197, "DETAILS", white, true, 1)
+	a.renderer.drawIcon(img, 177, 195, "\ue5c4", 18, cyan)
+	drawText(img, 200, 198, "PAGE", white, true, 1)
 	a.renderer.drawIcon(img, 248, 195, "\ue5c8", 18, cyan)
 	drawText(img, 271, 198, "PAGE", white, true, 1)
 	a.renderer.drawIcon(img, 330, 195, "\ue5d8", 18, green)
@@ -1213,10 +1711,10 @@ func (a *app) renderEvidenceDetail(img *image.RGBA, s liveState) {
 	}
 	drawMetricWide(img, 12, 156, "SHA-256:", trimCells(hash, 34), yellow)
 	hLine(img, 4, 476, 183, cyan2)
-	drawText(img, 11, 194, "A", green, true, 1)
-	drawText(img, 30, 194, "VERIFY SHA-256", white, true, 1)
-	drawText(img, 201, 194, "B", red, true, 1)
-	drawText(img, 220, 194, "BACK", white, true, 1)
+	drawText(img, 11, 194, "B", red, true, 1)
+	drawText(img, 30, 194, "BACK", white, true, 1)
+	drawText(img, 95, 194, "A", green, true, 1)
+	drawText(img, 114, 194, "VERIFY SHA-256", white, true, 1)
 	drawText(img, 289, 194, "DOWNLOAD: VIRTUAL PAGER", cyan, true, 1)
 }
 
@@ -1229,12 +1727,31 @@ func (a *app) drawStatus(img *image.RGBA, s liveState, startX int) {
 }
 
 func (r *renderer) drawIcon(img *image.RGBA, x, y int, glyph string, size int, c color.RGBA) {
-	face := r.material[size]
-	if face == nil {
-		return
+	_ = r
+	label := "?"
+	scale := 1
+	switch glyph {
+	case "\ue002":
+		label, scale = "!", 2
+	case "\ue1da":
+		label = "PC"
+	case "\ue5c4":
+		label = "<"
+	case "\ue5c8":
+		label = ">"
+	case "\ue5d8":
+		label = "^"
+	case "\ue5db":
+		label = "v"
+	case "\ue63e":
+		label = "RF"
+	case "\ue050":
+		label = "AL"
 	}
-	d := font.Drawer{Dst: img, Src: image.NewUniform(c), Face: face, Dot: fixed.P(x, y+size)}
-	d.DrawString(glyph)
+	if size < 20 {
+		scale = 1
+	}
+	drawText(img, x, y+max(0, (size-16)/2), label, c, true, scale)
 }
 
 func drawText(img *image.RGBA, x, y int, text string, c color.RGBA, bold bool, scale int) {
@@ -1382,11 +1899,20 @@ func hLine(img *image.RGBA, x1, x2, y int, c color.RGBA) { fill(img, image.Rect(
 func vLine(img *image.RGBA, x, y1, y2 int, c color.RGBA) { fill(img, image.Rect(x, y1, x+1, y2), c) }
 
 func canvasToFramebuffer(img *image.RGBA) []byte {
-	out := make([]byte, frameBytes)
+	return canvasToFramebufferInto(img, nil)
+}
+
+func canvasToFramebufferInto(img *image.RGBA, out []byte) []byte {
+	if cap(out) < frameBytes {
+		out = make([]byte, frameBytes)
+	} else {
+		out = out[:frameBytes]
+	}
 	for y := 0; y < screenHeight; y++ {
+		row := img.Pix[y*img.Stride:]
 		for x := 0; x < screenWidth; x++ {
-			p := img.RGBAAt(x, y)
-			v := uint16(p.R>>3)<<11 | uint16(p.G>>2)<<5 | uint16(p.B>>3)
+			src := x * 4
+			v := uint16(row[src]>>3)<<11 | uint16(row[src+1]>>2)<<5 | uint16(row[src+2]>>3)
 			// The physical landscape canvas is the device framebuffer rotated
 			// counter-clockwise: fb(x=221-y, y=x) == canvas(x,y).
 			i := (x*fbWidth + (fbWidth - 1 - y)) * 2

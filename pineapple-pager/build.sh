@@ -41,13 +41,12 @@ for d in user/general/PORT_ALERT user/general/ICMP_ALERT \
   [ -d "$SUB/$d" ] || { echo "ERROR: required curated payload missing from submodule: $d"; exit 1; }
   cp -R "$SUB/$d" "$OUT/$(dirname "$d")/"
 done
-for d in user/reconnaissance/SignalFence ; do
-  if [ -d "$SUB/$d" ]; then
-    cp -R "$SUB/$d" "$OUT/$(dirname "$d")/"
-  else
-    echo "NOTE: optional payload not in this library version, skipping: $d"
-  fi
-done
+optional_signal_fence="user/reconnaissance/SignalFence"
+if [ -d "$SUB/$optional_signal_fence" ]; then
+  cp -R "$SUB/$optional_signal_fence" "$OUT/$(dirname "$optional_signal_fence")/"
+else
+  echo "NOTE: optional payload not in this library version, skipping: $optional_signal_fence"
+fi
 
 # Deterministic 644 regardless of the builder's umask (device payload convention).
 find "$OUT" -type f -exec chmod 644 {} +

@@ -4,21 +4,42 @@ The single visible Pager entry point for the defensive payload package. It
 combines passive 2.4/5 GHz monitoring, local alerting, evidence review, and the
 curated manual tools in one menu.
 
-Open it from **Payloads > General > DEFCON Defense**. Version 4.3 runs a
-dedicated full-screen MIPS application that reproduces the three designed
+Open it from **Payloads > General > DEFCON Defense**. Version 4.19 runs a
+dedicated full-screen MIPS application with these designed
 480x222 Pager interfaces:
 
 1. the **general screen**, with threat state, Live RF, monitored networks, and
    page navigation;
-2. **threat detail**, with severity, plain-language event, affected network,
+2. **Observed APs**, populated by the current passive Recon snapshot, with
+   UP/DOWN selection and green-A watch/unwatch actions;
+3. **My Watch List**, showing the saved user list even when an AP is no longer
+   visible, with removal and a direct path back to observed APs for additions;
+4. **threat detail**, with severity, plain-language event, affected network,
    secondary RF evidence, and live capture state; and
-3. **PCAP Evidence**, with saved time, threat, SSID, size, status, details,
+5. **PCAP Evidence**, with saved time, threat, SSID, size, status, details,
    on-demand SHA-256 verification, deletion confirmation, and Virtual Pager
    download instructions.
 
 The same rendered canvas appears on the physical Pager and in authenticated
 Virtual Pager. The bridge is active only while the application is running and
 falls back to the stock Pager display when it exits.
+
+Long-running sessions use bounded Recon calls, unique atomic state updates,
+low-churn Virtual Pager long polling, a periodically refreshed physical-input
+descriptor, and a launch-only framebuffer ownership guard. If Recon stops
+answering, the interface remains navigable and marks monitoring as
+**DEGRADED** or **STALE** instead of presenting old data as live.
+
+The resource-constrained path keeps two reusable RGB565 buffers and one reusable
+canvas, uses fixed bitmap icons instead of a runtime TrueType parser, classifies
+all observed APs in one `awk` pass per Recon cycle, computes UI metrics in one
+pass, and performs one linear pre-existing-PCAP import when the UI session starts.
+Its screen/button server listens only on `172.16.52.1` and requires the random
+token injected into the authenticated Virtual Pager bridge.
+
+The monitor ignores Recon rows older than 45 seconds and will not alert from an
+observation cached before the current payload session. If a transmitter remains
+active, its next post-launch Recon timestamp makes it eligible for detection.
 
 Use it to:
 
@@ -27,14 +48,16 @@ Use it to:
   general screen remains usable;
 - watch the continuously refreshing **Live RF Traffic** dashboard with AP and
   packet totals, signal-quality bars, and 2.4/5 GHz activity;
-- browse **Browse Recon Networks** with the native arrow-button list to select,
-  focus/capture, or watch a specific AP;
+- open **AP Watch List** to browse APs observed in monitored Recon traffic and
+  use UP/DOWN plus green A to add or remove a specific AP from monitoring;
+- open **Monitored Networks** to edit the saved user watch list, including APs
+  that are no longer present in the current observation snapshot;
 - keep **Threat Activity Live** continuously refreshing from Recon; malicious
   deauth/disassociation and watched/trusted identity indicators are rendered
   prominently in red while the page remains open;
 - open the separate **Investigate Threats** native list with arrows and green A
   to select a current indicator for focused passive capture;
-- use UP/DOWN to select, LEFT/RIGHT to move among the three primary views,
+- use UP/DOWN to select, LEFT/RIGHT for the page action shown in each footer,
   green A to open/investigate, and red B for the action named in the footer;
 - watch selected networks without a baseline, or optionally create a reviewed
   BSSID baseline for broader new-AP detection;
@@ -46,6 +69,9 @@ Use it to:
   with single-capture locking, per-event/BSSID cooldown, and storage guards;
 - browse saved captures and retrieve them later with Virtual Pager's
   **Download Loot** control;
+- use the confirmed **Clear Session** main-menu action to clear current alert
+  history and all managed PCAP files without removing watched APs, the reviewed
+  baseline, or trusted rules;
 - open the non-transmitting hostile-RF emergency checklist;
 - confirm that both automatic alert handlers are armed;
 - launch PORT Alert or ICMP Alert;
@@ -88,11 +114,19 @@ Never put a PSK, password, token, or other secret in this file.
   `/root/loot/defcon_defense/`. Firmware-native focused PCAPs are saved under
   `/root/loot/pcap/`.
 
+`watched_aps.tsv` is also a user-editable, tab-separated list using one
+`BSSID`, `SSID`, `channel`, and `band` entry per line with no header. This supports preloading an
+authorized list before entering RF range; the native **My Watch List** screen
+shows those entries without requiring a current observation. Never store a PSK,
+password, token, or other secret in this file.
+
 Capture metadata is stored in `/root/loot/defcon_defense/pcap_index.tsv`,
 including timestamp, event, severity, SSID/BSSID, band/channel, signal,
 duration, size, SHA-256 state, status, trigger, and file path. SHA-256 is
 calculated on demand so importing a large pre-existing capture cannot block the
-general screen. No capture is deleted automatically.
+general screen. No capture is deleted automatically; **Clear Session** is an
+explicit bulk-delete action that requires RIGHT to arm and then A within three
+seconds. Repeated A presses alone cannot trigger it.
 
 The baseline is optional. Create it only after reviewing the current
 environment. A device already present in the baseline is treated as previously

@@ -20,10 +20,25 @@ pcap_evidence_configure() {
 }
 
 pcap_evidence_field() {
-  # BusyBox cut appends a newline even when its input does not contain one.
-  # State records are pipe-delimited single lines, so remove that output
-  # newline after replacing any embedded record separators.
-  printf '%s' "${1:-}" | tr '\t\r\n|' '    ' | cut -c1-128 | tr -d '\n'
+  local value="${1:-}"
+  value="${value//$'\t'/ }"
+  value="${value//$'\r'/ }"
+  value="${value//$'\n'/ }"
+  value="${value//|/ }"
+  printf '%.128s' "$value"
+}
+
+pcap_evidence_tsv_append() { # output field...
+  local output="$1" field separator=""
+  shift
+  {
+    for field in "$@"; do
+      printf '%s' "$separator"
+      pcap_evidence_field "$field"
+      separator=$'\t'
+    done
+    printf '\n'
+  } >> "$output"
 }
 
 pcap_evidence_now() {
@@ -69,27 +84,41 @@ pcap_evidence_mtime() {
 }
 
 pcap_evidence_import_existing() {
-  local active_path="" file clean_path epoch id size
+  local active_path="" capture_status="" _state_id _state_epoch file clean_path epoch id size
+  local token="${BASHPID:-$$}.${RANDOM:-0}" found missing
   pcap_evidence_index_init
-  if [ -s "$PCAP_EVIDENCE_STATE" ] && \
-     [ "$(cut -d '|' -f1 "$PCAP_EVIDENCE_STATE" 2>/dev/null)" = "CAPTURING" ]; then
-    active_path="$(cut -d '|' -f4 "$PCAP_EVIDENCE_STATE" 2>/dev/null)"
+  found="$PCAP_EVIDENCE_DIR/.pcap-found.$token"
+  missing="$PCAP_EVIDENCE_DIR/.pcap-missing.$token"
+  if [ -s "$PCAP_EVIDENCE_STATE" ]; then
+    IFS='|' read -r capture_status _state_id _state_epoch active_path _ < "$PCAP_EVIDENCE_STATE" || true
   fi
+  if [ "$capture_status" != "CAPTURING" ]; then
+    active_path=""
+  fi
+  find "$PCAP_EVIDENCE_PCAP_DIR" -type f 2>/dev/null | sort > "$found" || {
+    rm -f "$found" "$missing"
+    return 1
+  }
+  # Build the unindexed list in one pass. The previous implementation started
+  # one awk process per PCAP and became quadratic as evidence accumulated.
+  awk -F '\t' -v index_file="$PCAP_EVIDENCE_INDEX" -v active="$active_path" '
+    FILENAME == index_file {if (FNR > 1) indexed[$15]=1; next}
+    $0 != active && !indexed[$0] {print}
+  ' "$PCAP_EVIDENCE_INDEX" "$found" > "$missing" || {
+    rm -f "$found" "$missing"
+    return 1
+  }
   while IFS= read -r file; do
     [ -f "$file" ] || continue
-    [ "$file" = "$active_path" ] && continue
     clean_path="$(pcap_evidence_field "$file")"
-    if awk -F '\t' -v wanted="$clean_path" 'NR>1 && $15==wanted {found=1} END {exit !found}' \
-        "$PCAP_EVIDENCE_INDEX"; then
-      continue
-    fi
     epoch="$(pcap_evidence_mtime "$file")"
     id="legacy-${epoch}-$(basename "$file" | tr -c 'A-Za-z0-9._-' '_')"
     size="$(wc -c < "$file" | tr -d ' ')"
     printf '%s\t%s\tLEGACY_CAPTURE\tINFO\t<unknown>\t?\t?\t?\t?\t0\t%s\tpending\tSAVED\tlegacy\t%s\n' \
       "$epoch" "$(pcap_evidence_field "$id")" "$size" "$clean_path" \
       >> "$PCAP_EVIDENCE_INDEX"
-  done < <(find "$PCAP_EVIDENCE_PCAP_DIR" -type f 2>/dev/null | sort)
+  done < "$missing"
+  rm -f "$found" "$missing"
 }
 
 pcap_evidence_sha256() {
@@ -138,6 +167,27 @@ pcap_evidence_lock_release() {
   rm -rf -- "$PCAP_EVIDENCE_LOCK"
 }
 
+pcap_evidence_clear_all() {
+  local capture_pid="" current_pid="${BASHPID:-$$}"
+  pcap_evidence_configure
+
+  if [ -f "$PCAP_EVIDENCE_LOCK/pid" ]; then
+    capture_pid="$(cat "$PCAP_EVIDENCE_LOCK/pid" 2>/dev/null)"
+  fi
+  if pcap_evidence_capture_active; then
+    type WIFI_PCAP_STOP >/dev/null 2>&1 && WIFI_PCAP_STOP >/dev/null 2>&1 || true
+    if printf '%s' "$capture_pid" | grep -Eq '^[0-9]+$' && \
+       [ "$capture_pid" != "$current_pid" ] && [ "$capture_pid" != "$$" ]; then
+      kill "$capture_pid" 2>/dev/null || true
+    fi
+  fi
+
+  pcap_evidence_lock_release
+  find "$PCAP_EVIDENCE_PCAP_DIR" -type f -exec rm -f -- {} \; 2>/dev/null || true
+  rm -f -- "$PCAP_EVIDENCE_INDEX" "$PCAP_EVIDENCE_STATE" "$PCAP_EVIDENCE_DEDUPE"
+  pcap_evidence_index_init
+}
+
 pcap_evidence_dedupe_allowed() { # event bssid now
   local event bssid now row last
   pcap_evidence_configure
@@ -167,29 +217,30 @@ pcap_evidence_dedupe_mark() { # event bssid now
 
 pcap_evidence_state_write() { # status id epoch path event severity ssid bssid band channel signal duration trigger
   pcap_evidence_configure
-  local tmp="${PCAP_EVIDENCE_STATE}.tmp.$$" field
-  : > "$tmp"
-  for field in "$@"; do
-    [ -s "$tmp" ] && printf '|' >> "$tmp"
-    pcap_evidence_field "$field" >> "$tmp"
-  done
-  printf '\n' >> "$tmp"
+  local tmp="${PCAP_EVIDENCE_STATE}.tmp.${BASHPID:-$$}.${RANDOM:-0}" field separator=""
+  {
+    for field in "$@"; do
+      printf '%s' "$separator"
+      pcap_evidence_field "$field"
+      separator='|'
+    done
+    printf '\n'
+  } > "$tmp"
   mv -f "$tmp" "$PCAP_EVIDENCE_STATE"
 }
 
 pcap_evidence_state_status() {
   pcap_evidence_configure
   [ -s "$PCAP_EVIDENCE_STATE" ] || { echo "IDLE"; return; }
-  local state status epoch duration elapsed remaining
-  state="$(cat "$PCAP_EVIDENCE_STATE" 2>/dev/null)"
-  status="$(printf '%s' "$state" | cut -d '|' -f1)"
+  local status _id epoch _path _event _severity _ssid _bssid _band _channel _signal duration _trigger
+  local elapsed remaining
+  IFS='|' read -r status _id epoch _path _event _severity _ssid _bssid _band _channel \
+    _signal duration _trigger < "$PCAP_EVIDENCE_STATE" || true
   if [ "$status" = "CAPTURING" ]; then
     if ! pcap_evidence_capture_active; then
       echo "INTERRUPTED"
       return
     fi
-    epoch="$(printf '%s' "$state" | cut -d '|' -f3)"
-    duration="$(printf '%s' "$state" | cut -d '|' -f12)"
     elapsed=$(( $(pcap_evidence_now) - ${epoch:-0} ))
     remaining=$(( ${duration:-0} - elapsed ))
     [ "$remaining" -lt 0 ] && remaining=0
@@ -201,12 +252,13 @@ pcap_evidence_state_status() {
 
 pcap_evidence_state_for_bssid() { # bssid
   pcap_evidence_configure
-  local wanted state status state_bssid
+  local wanted status state_bssid
+  local _id _epoch _path _event _severity _ssid _band _channel _signal _duration _trigger
   wanted="$(pcap_evidence_field "$1" | tr 'a-f' 'A-F')"
   if [ -s "$PCAP_EVIDENCE_STATE" ]; then
-    state="$(cat "$PCAP_EVIDENCE_STATE" 2>/dev/null)"
-    status="$(printf '%s' "$state" | cut -d '|' -f1)"
-    state_bssid="$(printf '%s' "$state" | cut -d '|' -f8 | tr 'a-f' 'A-F')"
+    IFS='|' read -r status _id _epoch _path _event _severity _ssid state_bssid _band \
+      _channel _signal _duration _trigger < "$PCAP_EVIDENCE_STATE" || true
+    state_bssid="$(printf '%s' "$state_bssid" | tr 'a-f' 'A-F')"
     if [ -n "$wanted" ] && [ "$state_bssid" = "$wanted" ]; then
       pcap_evidence_state_status
       return
@@ -252,24 +304,12 @@ pcap_evidence_begin() { # event severity ssid bssid band channel signal trigger 
 
 pcap_evidence_finish() { # id
   pcap_evidence_configure
-  local wanted="$1" state status id epoch path event severity ssid bssid band channel signal duration trigger
+  local wanted="$1" status id epoch path event severity ssid bssid band channel signal duration trigger
   local ended elapsed size sha saved_status
   [ -s "$PCAP_EVIDENCE_STATE" ] || { pcap_evidence_lock_release; return 1; }
-  state="$(cat "$PCAP_EVIDENCE_STATE" 2>/dev/null)"
-  status="$(printf '%s' "$state" | cut -d '|' -f1)"
-  id="$(printf '%s' "$state" | cut -d '|' -f2)"
+  IFS='|' read -r status id epoch path event severity ssid bssid band channel signal duration trigger \
+    < "$PCAP_EVIDENCE_STATE" || true
   [ "$status" = "CAPTURING" ] && [ "$id" = "$wanted" ] || return 1
-  epoch="$(printf '%s' "$state" | cut -d '|' -f3)"
-  path="$(printf '%s' "$state" | cut -d '|' -f4)"
-  event="$(printf '%s' "$state" | cut -d '|' -f5)"
-  severity="$(printf '%s' "$state" | cut -d '|' -f6)"
-  ssid="$(printf '%s' "$state" | cut -d '|' -f7)"
-  bssid="$(printf '%s' "$state" | cut -d '|' -f8)"
-  band="$(printf '%s' "$state" | cut -d '|' -f9)"
-  channel="$(printf '%s' "$state" | cut -d '|' -f10)"
-  signal="$(printf '%s' "$state" | cut -d '|' -f11)"
-  duration="$(printf '%s' "$state" | cut -d '|' -f12)"
-  trigger="$(printf '%s' "$state" | cut -d '|' -f13)"
 
   type WIFI_PCAP_STOP >/dev/null 2>&1 && WIFI_PCAP_STOP >/dev/null 2>&1 || true
   ended="$(pcap_evidence_now)"; elapsed=$((ended - ${epoch:-ended}))
@@ -285,15 +325,9 @@ pcap_evidence_finish() { # id
   fi
 
   pcap_evidence_index_init
-  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-    "$(pcap_evidence_field "$epoch")" "$(pcap_evidence_field "$id")" \
-    "$(pcap_evidence_field "$event")" "$(pcap_evidence_field "$severity")" \
-    "$(pcap_evidence_field "$ssid")" "$(pcap_evidence_field "$bssid")" \
-    "$(pcap_evidence_field "$band")" "$(pcap_evidence_field "$channel")" \
-    "$(pcap_evidence_field "$signal")" "$(pcap_evidence_field "$elapsed")" \
-    "$(pcap_evidence_field "$size")" "$(pcap_evidence_field "$sha")" \
-    "$saved_status" "$(pcap_evidence_field "$trigger")" "$(pcap_evidence_field "$path")" \
-    >> "$PCAP_EVIDENCE_INDEX"
+  pcap_evidence_tsv_append "$PCAP_EVIDENCE_INDEX" "$epoch" "$id" "$event" "$severity" \
+    "$ssid" "$bssid" "$band" "$channel" "$signal" "$elapsed" "$size" "$sha" \
+    "$saved_status" "$trigger" "$path"
   pcap_evidence_state_write "$saved_status" "$id" "$epoch" "$path" "$event" "$severity" \
     "$ssid" "$bssid" "$band" "$channel" "$signal" "$elapsed" "$trigger"
   pcap_evidence_lock_release
@@ -308,20 +342,24 @@ pcap_evidence_bounded_start() { # event severity ssid bssid band channel signal 
     "$trigger" "$dedupe" "$duration")"
   status="${result%%|*}"
   if [ "$status" = "CAPTURING" ]; then
-    id="$(printf '%s' "$result" | cut -d '|' -f2)"
-    path="$(printf '%s' "$result" | cut -d '|' -f3)"
-    epoch="$(printf '%s' "$result" | cut -d '|' -f4)"
+    IFS='|' read -r status id path epoch <<< "$result"
     (
-      local worker_started worker_used worker_free
-      worker_started="$(pcap_evidence_now)"
-      while [ $(( $(pcap_evidence_now) - worker_started )) -lt "$duration" ]; do
+      local worker_started worker_used worker_free worker_initial capture_size projected_used ticks=0
+      worker_started=$SECONDS
+      worker_used="$(pcap_evidence_total_bytes)"
+      worker_initial="$(wc -c < "$path" 2>/dev/null)"
+      while [ $((SECONDS - worker_started)) -lt "$duration" ]; do
         sleep 1
-        worker_used="$(pcap_evidence_total_bytes)"
-        worker_free="$(pcap_evidence_free_bytes)"
-        [ "${worker_used:-0}" -lt "$PCAP_EVIDENCE_MAX_BYTES" ] 2>/dev/null || break
-        if [ "${worker_free:-0}" -gt 0 ] 2>/dev/null && \
-           [ "$worker_free" -le "$PCAP_EVIDENCE_MIN_FREE_BYTES" ] 2>/dev/null; then
-          break
+        capture_size="$(wc -c < "$path" 2>/dev/null)"
+        projected_used=$(( ${worker_used:-0} - ${worker_initial:-0} + ${capture_size:-0} ))
+        [ "$projected_used" -lt "$PCAP_EVIDENCE_MAX_BYTES" ] 2>/dev/null || break
+        ticks=$((ticks + 1))
+        if [ $((ticks % 5)) -eq 0 ]; then
+          worker_free="$(pcap_evidence_free_bytes)"
+          if [ "${worker_free:-0}" -gt 0 ] 2>/dev/null && \
+             [ "$worker_free" -le "$PCAP_EVIDENCE_MIN_FREE_BYTES" ] 2>/dev/null; then
+            break
+          fi
         fi
       done
       pcap_evidence_finish "$id" >/dev/null 2>&1 || true

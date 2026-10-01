@@ -18,7 +18,8 @@ rf_band_for() { # frequency_mhz channel
 }
 
 rf_normalize_json() { # recon_json snapshot_tsv
-  local input="$1" output="$2" tmp="${2}.tmp.$$"
+  local input="$1" output="$2"
+  local tmp="${2}.tmp.${BASHPID:-$$}.${RANDOM:-0}"
   jq -e 'type == "array"' "$input" >/dev/null 2>&1 || return 1
   jq -r '
     def text_or($fallback): if . == null or . == "" then $fallback else tostring end;
@@ -116,14 +117,13 @@ rf_watch_remove() { # watched_tsv bssid
 
 rf_watch_classify() { # watched_tsv bssid ssid channel
   local watched="$1" bssid ssid="$3" channel="$4" exact
+  local expected_ssid expected_channel _band
   bssid="$(rf_sanitize_mac "$2")"
   [ -f "$watched" ] || { echo "NONE"; return; }
 
   exact="$(awk -F '\t' -v b="$bssid" '$1 == b {print; exit}' "$watched")"
   if [ -n "$exact" ]; then
-    local expected_ssid expected_channel
-    expected_ssid="$(printf '%s\n' "$exact" | awk -F '\t' '{print $2}')"
-    expected_channel="$(printf '%s\n' "$exact" | awk -F '\t' '{print $3}')"
+    IFS=$'\t' read -r _ expected_ssid expected_channel _band <<< "$exact"
     if [ "$ssid" != "<hidden>" ] && [ "$expected_ssid" != "<hidden>" ] && \
        [ -n "$expected_ssid" ] && [ "$ssid" != "$expected_ssid" ]; then
       echo "WATCHED_BSSID_SSID_CHANGE"
@@ -141,9 +141,32 @@ rf_watch_classify() { # watched_tsv bssid ssid channel
   fi
 }
 
-rf_build_threat_snapshot() { # watched trusted baseline snapshot deauth_events now output
+rf_observation_is_actionable() { # seen_epoch now_epoch max_age session_start_epoch
+  local seen="${1:-}" now="${2:-0}" max_age="${3:-0}" session_start="${4:-0}"
+  # Tests and callers that explicitly disable both guards retain the historical
+  # classification behavior. The Pager runtime always supplies both guards.
+  if [ "${max_age:-0}" -le 0 ] 2>/dev/null && [ "${session_start:-0}" -le 0 ] 2>/dev/null; then
+    return 0
+  fi
+  case "$seen:$now:$max_age:$session_start" in
+    *[!0-9:]*) return 1 ;;
+  esac
+  # A five-second future allowance tolerates a Recon/API write racing the
+  # local date read, while rejecting invalid clocks and cached observations.
+  if [ "$max_age" -gt 0 ] 2>/dev/null; then
+    [ $((now - seen)) -le "$max_age" ] && [ $((seen - now)) -le 5 ] || return 1
+  fi
+  # A payload restart must not replay a row that PineAP learned before this
+  # monitoring session. A still-present transmitter will receive a newer
+  # Recon timestamp and become actionable during the next scan cycle.
+  [ "$session_start" -le 0 ] 2>/dev/null || [ "$seen" -gt "$session_start" ]
+}
+
+rf_build_threat_snapshot() { # watched trusted baseline snapshot deauth_events now output [max_age] [session_start]
   local watched="$1" trusted="$2" baseline="$3" snapshot="$4"
-  local deauth="$5" now="$6" output="$7" tmp="${7}.tmp.$$"
+  local deauth="$5" now="$6" output="$7"
+  local tmp="${7}.tmp.${BASHPID:-$$}.${RANDOM:-0}"
+  local max_age="${8:-0}" session_start="${9:-0}"
   local watched_in="$watched" trusted_in="$trusted" baseline_in="$baseline" deauth_in="$deauth"
   [ -f "$watched_in" ] || watched_in=/dev/null
   [ -f "$trusted_in" ] || trusted_in=/dev/null
@@ -152,7 +175,8 @@ rf_build_threat_snapshot() { # watched trusted baseline snapshot deauth_events n
   [ -f "$snapshot" ] || return 1
 
   awk -v watched="$watched_in" -v trusted="$trusted_in" -v baseline="$baseline_in" \
-      -v deauth="$deauth_in" -v snapshot="$snapshot" -v cutoff="$((now - 120))" '
+      -v deauth="$deauth_in" -v snapshot="$snapshot" -v now="$now" \
+      -v cutoff="$((now - 120))" -v max_age="$max_age" -v session_start="$session_start" '
     BEGIN {FS="\t"; OFS="\t"}
     function channel_ok(spec, channel, values, n, i) {
       gsub(/[ \r]/, "", spec)
@@ -187,6 +211,9 @@ rf_build_threat_snapshot() { # watched trusted baseline snapshot deauth_events n
     }
     FILENAME == snapshot {
       if ($8 != "2.4GHz" && $8 != "5GHz") next
+      seen=$6+0
+      if (max_age > 0 && ($6 !~ /^[0-9]+$/ || seen < now-max_age || seen > now+5)) next
+      if (session_start > 0 && ($6 !~ /^[0-9]+$/ || seen <= session_start)) next
       b=toupper($1); ssid=$2; channel=$3; event="NONE"; color="red"
       if (deauth_count[b] > 0) event="DEAUTH_ACTIVITY"
       else if (b in wssid) {
@@ -204,7 +231,7 @@ rf_build_threat_snapshot() { # watched trusted baseline snapshot deauth_events n
       else if (b in trusted_bssid) event="TRUSTED_BSSID_SSID_CHANGE"
       else if (baseline_rows > 0 && !(b in baseline_bssid)) {event="NEW_BSSID"; color="yellow"}
 
-      if (event != "NONE") print b, ssid, channel, $8, $5, $7, event, deauth_count[b]+0, color
+      if (event != "NONE") print b, ssid, channel, $8, $5, $7, event, deauth_count[b]+0, color, $4
     }
   ' "$watched_in" "$trusted_in" "$baseline_in" "$deauth_in" "$snapshot" > "$tmp" || {
     rm -f "$tmp"
@@ -316,10 +343,7 @@ rf_state_should_alert() { # state event bssid now threshold window cooldown
   mkdir -p "$(dirname "$state")"
   row="$(awk -F '|' -v e="$event" -v b="$bssid" '$1==e && $2==b {print; exit}' "$state" 2>/dev/null)"
   if [ -n "$row" ]; then
-    count="$(printf '%s' "$row" | cut -d '|' -f3)"
-    first="$(printf '%s' "$row" | cut -d '|' -f4)"
-    last="$(printf '%s' "$row" | cut -d '|' -f5)"
-    last_alert="$(printf '%s' "$row" | cut -d '|' -f6)"
+    IFS='|' read -r _ _ count first last last_alert <<< "$row"
   else
     count=0; first="$now"; last=0; last_alert=0
   fi
@@ -341,13 +365,37 @@ rf_count_band() { # snapshot_tsv band
   awk -F '\t' -v b="$2" '$8 == b && !seen[$1]++ {count++} END {print count+0}' "$1"
 }
 
+rf_ui_metrics() { # snapshot_tsv threats_tsv watched_tsv -> 2.4|5|threats|watched
+  local snapshot="$1" threats="$2" watched="$3"
+  local snapshot_in="$snapshot" threats_in="$threats" watched_in="$watched"
+  [ -f "$snapshot_in" ] || snapshot_in=/dev/null
+  [ -f "$threats_in" ] || threats_in=/dev/null
+  [ -f "$watched_in" ] || watched_in=/dev/null
+  awk -F '\t' -v snapshot="$snapshot_in" -v threats="$threats_in" -v watched="$watched_in" '
+    FILENAME == snapshot {
+      if (($8 == "2.4GHz" || $8 == "5GHz") && !aps[$8 SUBSEP $1]++) bands[$8]++
+      next
+    }
+    FILENAME == threats {if (NF >= 9 && $1 != "") threat_count++; next}
+    FILENAME == watched {
+      b=toupper($1)
+      if (b ~ /^([0-9A-F][0-9A-F]:){5}[0-9A-F][0-9A-F]$/) watched_count++
+    }
+    END {print bands["2.4GHz"]+0 "|" bands["5GHz"]+0 "|" threat_count+0 "|" watched_count+0}
+  ' "$snapshot_in" "$threats_in" "$watched_in"
+}
+
 rf_count_config_rows() { # pipe-delimited config
   [ -f "$1" ] || { echo 0; return; }
   awk '!/^[[:space:]]*#/ && !/^[[:space:]]*$/ {count++} END {print count+0}' "$1"
 }
 
 rf_clean_field() {
-  printf '%s' "${1:-}" | tr '\t\r\n' '   ' | cut -c1-96
+  local value="${1:-}"
+  value="${value//$'\t'/ }"
+  value="${value//$'\r'/ }"
+  value="${value//$'\n'/ }"
+  printf '%.96s' "$value"
 }
 
 rf_append_finding() { # file epoch type bssid ssid channel freq signal band
