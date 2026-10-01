@@ -209,7 +209,9 @@ func run(o options) error {
 	}
 
 	probeDone := make(chan Capabilities, 1)
+	workers.Add(1)
 	go func() {
+		defer workers.Done()
 		probeDone <- Probe(ctx, ProbeDeps{
 			Radio: radio, Bluetooth: func() bool { return BluetoothAvailable(o.btIface) },
 			Settle: 500 * time.Millisecond, CaptureWindow: 300 * time.Millisecond,
