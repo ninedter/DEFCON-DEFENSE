@@ -38,7 +38,9 @@ assert_rc "$?" "0" "full-screen UI is compiled for the Pager MIPS architecture"
 assert_eq "$(ls -l "$OUT/user/defcon/DEFCON-DEFENSE/defcon-ui" | cut -c1-10)" "-rwxr-xr-x" \
   "full-screen UI binary is executable"
 ui_bytes="$(wc -c < "$OUT/user/defcon/DEFCON-DEFENSE/defcon-ui" | tr -d ' ')"
-[ "$ui_bytes" -lt 7100000 ]; assert_rc "$?" "0" "full-screen UI stays inside the embedded binary-size budget"
+# v4.20 (EVIOCGRAB input grab, frozen-UI handoff) builds to 7,209,151 bytes;
+# keep ~90 KB of headroom so real size regressions still fail.
+[ "$ui_bytes" -lt 7300000 ]; assert_rc "$?" "0" "full-screen UI stays inside the embedded binary-size budget"
 
 # SignalFence is optional (may be absent in newer library versions):
 # built iff present in the submodule.

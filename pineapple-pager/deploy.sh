@@ -15,6 +15,8 @@ REMOTE_ROOT="${PAGER_PAYLOAD_ROOT:-/mmc/root/payloads}"
 LIBRARY="${PAGER_LIBRARY:-$HERE/library}"
 BACKUP_ROOT="${PAGER_BACKUP_ROOT:-/mmc/root/payload-backups}"
 SSH="${PAGER_SSH:-ssh}"
+KEEP="${PAGER_BACKUP_KEEP:-3}"
+case "$KEEP" in ''|*[!0-9]*) echo "ERROR: PAGER_BACKUP_KEEP must be a number" >&2; exit 2 ;; esac
 DRY_RUN=0
 SKIP_BUILD=0
 PAYLOAD="RF-BUDDY"
@@ -84,6 +86,18 @@ fi
 mv $NAME.new $NAME
 chmod 755 $NAME/$BIN
 $LEGACY
+# Keep only the newest $KEEP deploy backups of this payload. Only folders this
+# script creates (YYYYMMDD-HHMMSS) are considered, and only their $NAME entry.
+n=0
+for d in \$(ls -1d '$BACKUP_ROOT'/[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-[0-9][0-9][0-9][0-9][0-9][0-9] 2>/dev/null | sort -r); do
+  [ -d \"\$d/$NAME\" ] || continue
+  n=\$((n + 1))
+  if [ \"\$n\" -gt $KEEP ]; then
+    rm -rf \"\$d/$NAME\"
+    rmdir \"\$d\" 2>/dev/null || true
+    echo \"pruned old backup: \$d/$NAME\"
+  fi
+done
 if ! uci -q get 'payloads.@directories[0].payloaddir' | tr ' ' '\n' | grep -qx 'user/defcon'; then
   uci add_list 'payloads.@directories[0].payloaddir=user/defcon'
   uci commit payloads

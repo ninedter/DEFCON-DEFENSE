@@ -131,4 +131,29 @@ assert_rc "$?" "0" "RF-BUDDY is untouched by a DEFCON-DEFENSE deploy"
 diff -r "$TMP/other-before" "$PR/user/defcon/OTHER" >/dev/null
 assert_rc "$?" "0" "user/defcon/OTHER is untouched by a DEFCON-DEFENSE deploy"
 
+# --- old backups are pruned, per payload, deploy-made folders only ---------
+BR2="$TMP/backups2"
+for ts in 20250101-000001 20250101-000002 20250101-000003 20250101-000004 20250101-000005; do
+  mkdir -p "$BR2/$ts/RF-BUDDY"; echo "$ts" > "$BR2/$ts/RF-BUDDY/payload.sh"
+done
+mkdir -p "$BR2/20250101-000001/DEFCON-DEFENSE" "$BR2/defcon-defense-manual/RF-BUDDY"
+echo keep > "$BR2/20250101-000001/DEFCON-DEFENSE/payload.sh"
+echo keep > "$BR2/defcon-defense-manual/RF-BUDDY/payload.sh"
+out="$(FAKE_SSH_EXEC=1 PATH="$STUBS:$PATH" PAGER_PAYLOAD_ROOT="$PR" PAGER_BACKUP_ROOT="$BR2" \
+  PAGER_LIBRARY="$LIB" PAGER_SSH="$FAKE_SSH" bash "$ROOT/deploy.sh" --skip-build)"
+assert_rc "$?" "0" "deploy with old backups succeeds"
+assert_eq "$(find "$BR2" -mindepth 2 -maxdepth 2 -name RF-BUDDY -path "$BR2/2*" | wc -l | tr -d ' ')" "3" \
+  "only the newest 3 RF-BUDDY deploy backups are kept"
+[ ! -e "$BR2/20250101-000003/RF-BUDDY" ] && [ -d "$BR2/20250101-000004/RF-BUDDY" ] && [ -d "$BR2/20250101-000005/RF-BUDDY" ]
+assert_rc "$?" "0" "the oldest RF-BUDDY backups are the ones pruned"
+[ ! -e "$BR2/20250101-000002" ]; assert_rc "$?" "0" "emptied backup folders are removed"
+[ -f "$BR2/20250101-000001/DEFCON-DEFENSE/payload.sh" ]
+assert_rc "$?" "0" "pruning RF-BUDDY never touches DEFCON-DEFENSE backups"
+[ -f "$BR2/defcon-defense-manual/RF-BUDDY/payload.sh" ]
+assert_rc "$?" "0" "manual (non-timestamp) backups are never pruned"
+printf '%s' "$out" | grep -q 'pruned old backup'; assert_rc "$?" "0" "pruning is reported"
+
+PAGER_BACKUP_KEEP=x PAGER_LIBRARY="$LIB" PAGER_SSH="$FAKE_SSH" bash "$ROOT/deploy.sh" --skip-build --dry-run >/dev/null 2>&1
+assert_rc "$?" "2" "non-numeric PAGER_BACKUP_KEEP is rejected"
+
 exit "$FAIL"
