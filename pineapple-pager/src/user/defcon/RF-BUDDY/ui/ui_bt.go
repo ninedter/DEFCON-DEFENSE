@@ -201,6 +201,15 @@ func fmtRSSI(rssi int) string {
 
 // btAddrText returns the address; short drops the first octet to fit the
 // 16-cell metric value box.
+// btRowText is the device-level row text: the name if advertised, else the
+// address (brand and type are already in the breadcrumb).
+func btRowText(d BLEDevice) string {
+	if d.Name != "" {
+		return d.Name
+	}
+	return btAddrText(d, true)
+}
+
 func btAddrText(d BLEDevice, short bool) string {
 	a := d.Addr
 	if short && len(a) > 3 {

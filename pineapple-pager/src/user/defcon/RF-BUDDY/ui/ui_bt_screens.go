@@ -113,7 +113,7 @@ func (u *ui) renderBT(img *image.RGBA, s Snapshot, now time.Time) {
 					c = yellow
 					drawText(img, 6, y, ">", yellow, true, 1)
 				}
-				drawTextBox(img, image.Rect(14, y, 210, y+16), 14, y, trimCells(d.Label, 24), c, true, 1)
+				drawTextBox(img, image.Rect(14, y, 210, y+16), 14, y, trimCells(btRowText(d), 24), c, true, 1)
 				drawTextRightBox(img, image.Rect(210, y, btListRight, y+16), y, fmtRSSI(d.RSSI), signalColor(d.RSSI), true)
 			}
 			renderBTPanel(img, list[sel], now)
