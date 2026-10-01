@@ -198,18 +198,18 @@ func run(o options) error {
 		}
 	}()
 
-	var displayedPixels, displayedFrame, scratch []byte
+	var displayedPixels, displayedFrame, scratch, frameBuf []byte
 	redraw := func() error {
 		canvas := view.Render(engine.Snapshot(), time.Now())
 		if bytes.Equal(displayedPixels, canvas.Pix) {
 			return nil
 		}
 		displayedPixels = append(displayedPixels[:0], canvas.Pix...)
-		frame := canvasToFramebuffer(canvas)
-		if err := writeFramebuffer(fb, frame); err != nil {
+		frameBuf = canvasToFramebufferInto(frameBuf, canvas)
+		if err := writeFramebuffer(fb, frameBuf); err != nil {
 			return err
 		}
-		displayedFrame = append(displayedFrame[:0], frame...)
+		displayedFrame = append(displayedFrame[:0], frameBuf...)
 		mir.publish(canvas)
 		return nil
 	}
@@ -287,6 +287,11 @@ func run(o options) error {
 			}
 		case <-engine.Updates():
 			tickNS.Store(int64(view.TickInterval(engine.Snapshot())))
+			// BT screens show no Wi-Fi sweep data and already refresh once a
+			// second; redrawing on every sweep update cost the Pager ~25% CPU.
+			if view.LiveBT() {
+				continue
+			}
 			if err := redraw(); err != nil {
 				return err
 			}
