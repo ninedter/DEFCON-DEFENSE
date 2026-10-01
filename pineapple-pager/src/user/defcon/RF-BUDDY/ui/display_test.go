@@ -164,3 +164,33 @@ func TestWrapCells(t *testing.T) {
 		t.Fatalf("max lines = %q", got)
 	}
 }
+
+func TestViewerPageServedAtRootOnly(t *testing.T) {
+	srv := httptest.NewServer(newMirror().handler(make(chan string, 1)))
+	defer srv.Close()
+	resp, err := http.Get(srv.URL + "/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != 200 || !strings.HasPrefix(resp.Header.Get("Content-Type"), "text/html") {
+		t.Fatalf("GET / = %d %q", resp.StatusCode, resp.Header.Get("Content-Type"))
+	}
+	for _, want := range []string{"RF-BUDDY", "/screen.png?wait=1&rev=", "/button?name=", "pixelated"} {
+		if !strings.Contains(string(body), want) {
+			t.Errorf("viewer missing %q", want)
+		}
+	}
+	if strings.Contains(string(body), "http://") || strings.Contains(string(body), "https://") {
+		t.Error("viewer must not reference external resources")
+	}
+	resp, err = http.Get(srv.URL + "/nope")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != 404 {
+		t.Fatalf("GET /nope = %d, want 404", resp.StatusCode)
+	}
+}

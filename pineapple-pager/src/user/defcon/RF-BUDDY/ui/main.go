@@ -33,7 +33,7 @@ func parseOptions(args []string) (options, error) {
 	fs.StringVar(&o.framebuffer, "framebuffer", "/dev/fb0", "Pager framebuffer")
 	fs.StringVar(&o.inputDevice, "input-device", "/dev/input/event0", "Pager evdev button device")
 	fs.StringVar(&o.readyFile, "ready-file", "", "written after the first frame is on screen")
-	fs.StringVar(&o.virtualListen, "virtual-listen", ":1472", "Virtual Pager bridge listen address")
+	fs.StringVar(&o.virtualListen, "virtual-listen", ":1474", "Virtual Pager bridge listen address")
 	fs.StringVar(&o.previewDir, "preview-dir", "", "render preview PNGs and exit")
 	fs.StringVar(&o.iface, "iface", "wlan1mon", "monitor interface")
 	fs.StringVar(&o.btIface, "bt-iface", "hci0", "Bluetooth adapter")
