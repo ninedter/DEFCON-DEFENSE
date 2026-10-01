@@ -74,7 +74,7 @@ func memberBrandSkip(uuid int) bool { return uuid == 0xFD6F || uuid == 0xFEAA }
 // never touches the lazily loaded database (cheap provisional answer).
 //
 // Brand: company id > byte-swapped company id > member service UUID > name
-// keyword > OUI (PUBLIC/STATIC addresses only) > first word of the name >
+// keyword > OUI (PUBLIC addresses only; random addresses carry no maker) > first word of the name >
 // service hint > "ID XXXX" > UNKNOWN.
 // Kind: manufacturer kind > name keyword kind (unless OTHER) > service kind >
 // SIG appearance > OTHER.
@@ -109,7 +109,7 @@ func classifyBLE(in bleClassIn, useDB bool) bleClass {
 	if brand == "" {
 		brand = nameBrand
 	}
-	if brand == "" && useDB && (c.addrKind == addrPublic || c.addrKind == addrStatic) {
+	if brand == "" && useDB && c.addrKind == addrPublic {
 		if b, ok := OUIBrand(in.addr); ok {
 			brand = b
 		}
