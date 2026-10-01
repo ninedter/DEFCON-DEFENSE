@@ -76,7 +76,7 @@ RF-BUDDY gets its own menu category; DEFCON Defense is not moved and stays where
 RF-BUDDY/
   README.md
   payload.sh         CONFIG block, PATH export, lock file, start UI, stock-UI freeze/resume,
-                     freeze watchdog, cleanup trap (EXAMINE CANCEL, stop hcitool, buzzer reset)
+                     freeze watchdog, cleanup trap (EXAMINE CANCEL, buzzer reset)
   ui/                Go program, static MIPS32 soft-float
     display.go       framebuffer, exclusive input grab, own viewer page on :1474
     channels.go      band/channel model
@@ -230,7 +230,9 @@ TO ONE CHANNEL AT A TIME`. Advances to Overview after 2 s.
   (SSID or BSSID, dBm); `BT/BLE NEARBY <n> DEV`.
 - Tick: interval 2 s at score 20 → 0.3 s at 100; off below 20; toggled with UP. The UI
   binary pulses the buzzer itself at `TICK_FREQ_HZ` / `TICK_VOLUME` (`--tick-freq-hz`,
-  `--tick-volume`), saving and restoring the buzzer's `frequency` and `volume`; a backstop
+  `--tick-volume`), saving and restoring the buzzer's `frequency` and `volume`. Loudness is applied through the
+  buzzer `brightness` (the driver maps brightness to volume: volume = brightness*100/max), not
+  by writing `volume`; a backstop
   in `payload.sh` and the watchdog silence it if the UI dies. No ringtone or vibrate API is used.
 - Footer: `B BACK` · `LEFT/RIGHT CH` · `UP AUDIO` · `A MARK SPOT`.
 - `MARK SPOT` appends a numbered mark to `marks.csv` and toasts
@@ -271,8 +273,9 @@ Virtual Pager → Download Loot.
   `payload.sh` is alive, nothing resumes the Pager; the operator holds the power button.
 - **Cleanup** (`trap` on EXIT/INT/TERM/HUP and after the binary returns or crashes):
   stop the UI (TERM, KILL after 3 s), resume the stock UI, stop the watchdog, silence the
-  buzzer, `killall -INT hcitool` plus an LE scan-disable, `_pineap EXAMINE CANCEL`, release
-  the lock. Idempotent.
+  buzzer, `_pineap EXAMINE CANCEL`, release the lock. Idempotent. `payload.sh` never kills
+  shared processes: the UI binary stops its own `hcitool lescan` (SIGINT via exec Cancel, then
+  an LE scan-disable; the child also gets SIGINT via Pdeathsig if the UI is SIGKILLed).
 - Overview tune failure → channel skipped after 3 consecutive failures (cleared every 20 cycles or when all are skipped); capture or channel-lock failure at probe → fatal screen.
 
 ## Deployment (`deploy.sh`)

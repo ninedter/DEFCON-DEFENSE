@@ -51,16 +51,44 @@ func (b *Buzzer) write(name, value string) {
 	_ = os.WriteFile(filepath.Join(b.dir, name), []byte(value+"\n"), 0o644)
 }
 
-// Beep sounds the buzzer for d, then silences it.
+// brightnessFor is the brightness that makes the driver derive the wanted
+// volume (volume = brightness*100/max_brightness); 0 means stay silent.
+func (b *Buzzer) brightnessFor() int {
+	if b.vol <= 0 {
+		return 0
+	}
+	max, err := strconv.Atoi(b.maxBrightness)
+	if err != nil || max < 1 {
+		max = 1
+	}
+	br := max * b.vol / 100
+	if br < 1 {
+		br = 1
+	}
+	return br
+}
+
+// on starts the tone. The driver derives `volume` from `brightness`, so
+// loudness is set through brightness and `volume` is never written here.
+func (b *Buzzer) on() {
+	br := b.brightnessFor()
+	if br == 0 {
+		return
+	}
+	b.write("frequency", strconv.Itoa(b.freq))
+	b.write("brightness", strconv.Itoa(br))
+}
+
+func (b *Buzzer) off() { b.write("brightness", "0") }
+
+// Beep sounds the buzzer for d, then silences it. Volume 0 only sleeps.
 func (b *Buzzer) Beep(d time.Duration) {
 	if b == nil {
 		return
 	}
-	b.write("frequency", strconv.Itoa(b.freq))
-	b.write("volume", strconv.Itoa(b.vol))
-	b.write("brightness", b.maxBrightness)
+	b.on()
 	time.Sleep(d)
-	b.write("brightness", "0")
+	b.off()
 }
 
 // Close silences the buzzer and restores the saved frequency and volume.

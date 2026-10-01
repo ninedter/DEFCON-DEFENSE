@@ -84,6 +84,8 @@ func (s *BLEScanner) Run(ctx context.Context) {
 		// SIGINT lets hcitool disable scanning itself before Go force-kills.
 		cmd.Cancel = func() error { return cmd.Process.Signal(os.Interrupt) }
 		cmd.WaitDelay = 2 * time.Second
+		// if the UI is SIGKILLed, hcitool still gets SIGINT and disables scanning.
+		setChildDeathSignal(cmd)
 		if stdout, err := cmd.StdoutPipe(); err == nil && cmd.Start() == nil {
 			s.consume(stdout)
 			_ = cmd.Wait()

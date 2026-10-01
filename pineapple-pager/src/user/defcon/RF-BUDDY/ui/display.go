@@ -107,7 +107,7 @@ func maintainDisplayOwnership(fb io.ReadWriteSeeker, expected []byte, scratch *[
 	return nil
 }
 
-// mirror publishes the rendered canvas to the Virtual Pager bridge on :1472.
+// mirror publishes the rendered canvas to the Virtual Pager bridge on :1474.
 type mirror struct {
 	mu       sync.RWMutex
 	png      []byte

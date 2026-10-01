@@ -38,8 +38,11 @@ func TestBuzzerBeepAndRestore(t *testing.T) {
 	if got := readTrim(t, dir, "brightness"); got != "0" {
 		t.Fatalf("brightness after beep = %q", got)
 	}
-	if readTrim(t, dir, "frequency") != "2000" || readTrim(t, dir, "volume") != "60" {
-		t.Fatal("beep must set frequency and volume")
+	if readTrim(t, dir, "frequency") != "2000" {
+		t.Fatal("beep must set frequency")
+	}
+	if readTrim(t, dir, "volume") != "0" {
+		t.Fatal("beep must not write volume (driver derives it from brightness)")
 	}
 	raw, _ := os.ReadFile(filepath.Join(dir, "frequency"))
 	if string(raw) != "2000\n" {
@@ -73,17 +76,30 @@ func TestBuzzerNilSafe(t *testing.T) {
 	b.Close()
 }
 
-func TestBuzzerVolumeClamped(t *testing.T) {
-	for in, want := range map[int]string{150: "100", -5: "0", 60: "60"} {
+func TestBuzzerBrightnessFromVolume(t *testing.T) {
+	for in, want := range map[int]string{60: "153", 100: "255", 1: "2", 150: "255", 0: "0", -5: "0"} {
 		dir := fakeBuzzerDir(t)
 		b, err := OpenBuzzer(dir, 2000, in)
 		if err != nil {
 			t.Fatal(err)
 		}
-		b.Beep(time.Millisecond)
-		if got := readTrim(t, dir, "volume"); got != want {
-			t.Fatalf("volume %d wrote %q, want %q", in, got, want)
+		b.on()
+		if got := readTrim(t, dir, "brightness"); got != want {
+			t.Fatalf("volume %d: brightness while on = %q, want %q", in, got, want)
+		}
+		b.off()
+		if got := readTrim(t, dir, "brightness"); got != "0" {
+			t.Fatalf("brightness after off = %q", got)
 		}
 		b.Close()
+	}
+}
+
+func TestBuzzerVolumeZeroStaysSilent(t *testing.T) {
+	dir := fakeBuzzerDir(t)
+	b, _ := OpenBuzzer(dir, 2000, 0)
+	b.Beep(time.Millisecond)
+	if readTrim(t, dir, "brightness") != "0" || readTrim(t, dir, "frequency") != "523" {
+		t.Fatal("volume 0 must not touch the buzzer")
 	}
 }
