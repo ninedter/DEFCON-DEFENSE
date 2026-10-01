@@ -1,9 +1,10 @@
 package main
 
 import (
+	"context"
 	"os"
-	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -32,32 +33,37 @@ func TestParseOptionsOverrides(t *testing.T) {
 	}
 }
 
-func TestTickWriterWritesOnlyOnChange(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "tick_ms")
-	w := &tickWriter{path: path}
-	if err := w.Set(1150 * time.Millisecond); err != nil {
+func TestParseOptionsBuzzerDefaultsAndLegacyTickFile(t *testing.T) {
+	o, err := parseOptions([]string{"--tick-file", "/tmp/x"})
+	if err != nil {
 		t.Fatal(err)
 	}
-	if b, _ := os.ReadFile(path); string(b) != "1150\n" {
-		t.Fatalf("tick file = %q", b)
+	if o.buzzerDir != "/sys/class/leds/buzzer" || o.tickFreqHz != 2000 || o.tickVolume != 128 {
+		t.Fatalf("buzzer defaults = %+v", o)
 	}
-	if err := os.WriteFile(path, []byte("sentinel"), 0o644); err != nil {
-		t.Fatal(err)
+}
+
+func TestTickLoopBeepsOnlyWhenActiveAndStops(t *testing.T) {
+	dir := fakeBuzzerDir(t)
+	b, _ := OpenBuzzer(dir, 2000, 128)
+	var iv atomic.Int64
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { tickLoop(ctx, b, &iv); close(done) }()
+	time.Sleep(80 * time.Millisecond)
+	if readTrim(t, dir, "frequency") != "523" {
+		t.Fatal("idle loop must not beep")
 	}
-	if err := w.Set(1150 * time.Millisecond); err != nil {
-		t.Fatal(err)
+	iv.Store(int64(20 * time.Millisecond))
+	time.Sleep(400 * time.Millisecond)
+	if readTrim(t, dir, "frequency") != "2000" {
+		t.Fatal("active loop must beep")
 	}
-	if b, _ := os.ReadFile(path); string(b) != "sentinel" {
-		t.Fatal("unchanged interval must not rewrite the tick file")
-	}
-	if err := w.Set(0); err != nil {
-		t.Fatal(err)
-	}
-	if b, _ := os.ReadFile(path); string(b) != "0\n" {
-		t.Fatalf("tick off = %q", b)
-	}
-	if err := (&tickWriter{}).Set(time.Second); err != nil {
-		t.Fatal("empty path must be a no-op")
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("tickLoop did not exit on cancel")
 	}
 }
 

@@ -13,17 +13,17 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
-	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 )
 
 type options struct {
 	framebuffer, inputDevice, readyFile, virtualListen, previewDir string
-	iface, btIface, lootDir, tickFile, officeSSID                  string
-	dwellMS, logMaxMB, minFreeMB                                   int
+	iface, btIface, lootDir, tickFile, officeSSID, buzzerDir       string
+	dwellMS, logMaxMB, minFreeMB, tickFreqHz, tickVolume           int
 	thresholds                                                     Thresholds
 }
 
@@ -38,7 +38,10 @@ func parseOptions(args []string) (options, error) {
 	fs.StringVar(&o.iface, "iface", "wlan1mon", "monitor interface")
 	fs.StringVar(&o.btIface, "bt-iface", "hci0", "Bluetooth adapter")
 	fs.StringVar(&o.lootDir, "loot-dir", "/root/loot/rf_buddy", "session log root")
-	fs.StringVar(&o.tickFile, "tick-file", "", "lock-on tick interval file read by payload.sh")
+	fs.StringVar(&o.tickFile, "tick-file", "", "deprecated no-op; the lock-on tick is now played by the buzzer ticker")
+	fs.StringVar(&o.buzzerDir, "buzzer-dir", "/sys/class/leds/buzzer", "buzzer sysfs directory")
+	fs.IntVar(&o.tickFreqHz, "tick-freq-hz", 2000, "lock-on tick tone frequency")
+	fs.IntVar(&o.tickVolume, "tick-volume", 128, "lock-on tick volume")
 	fs.StringVar(&o.officeSSID, "office-ssid", "", "office SSID for WEAK COVERAGE")
 	fs.IntVar(&o.dwellMS, "dwell-ms", 250, "overview dwell per channel")
 	fs.IntVar(&o.logMaxMB, "log-max-mb", 20, "per-session log cap")
@@ -83,29 +86,6 @@ func main() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-}
-
-// tickWriter publishes the lock-on tick interval (ms, 0 = off) for the
-// payload.sh tick loop, rewriting the file only when the value changes.
-type tickWriter struct {
-	path    string
-	last    time.Duration
-	written bool
-}
-
-func (w *tickWriter) Set(d time.Duration) error {
-	if w.path == "" || (w.written && d == w.last) {
-		return nil
-	}
-	tmp := w.path + ".tmp"
-	if err := os.WriteFile(tmp, []byte(strconv.FormatInt(d.Milliseconds(), 10)+"\n"), 0o644); err != nil {
-		return err
-	}
-	if err := os.Rename(tmp, w.path); err != nil {
-		return err
-	}
-	w.last, w.written = d, true
-	return nil
 }
 
 func sessionText(o options, c Capabilities, started time.Time) string {
@@ -164,8 +144,13 @@ func run(o options) error {
 	ble := NewBLECounter(30 * time.Second)
 	engine := NewEngine(cfg, radio, NewInventory(nil), ble, logger, time.Now)
 	view := newUI(engine, logger, time.Now)
-	tick := &tickWriter{path: o.tickFile}
-	defer func() { _ = tick.Set(0) }()
+	// Registered first among these three so it runs LAST (defers are LIFO):
+	// the buzzer must outlive the ticker worker, which Beeps until the workers
+	// are joined below, and only then be silenced and restored.
+	buzzer, buzzerErr := OpenBuzzer(o.buzzerDir, o.tickFreqHz, o.tickVolume)
+	if buzzerErr == nil {
+		defer buzzer.Close()
+	}
 	// Registered after the radio/capturer/logger defers so it runs before them:
 	// stop the workers and wait for them to return before releasing the channel
 	// and closing the capture socket and logger they use.
@@ -174,6 +159,16 @@ func run(o options) error {
 		cancel()
 		workers.Wait()
 	}()
+
+	// Current lock-on tick interval in nanoseconds (0 = off), set by the main loop.
+	var tickNS atomic.Int64
+	if buzzerErr == nil {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			tickLoop(ctx, buzzer, &tickNS)
+		}()
+	}
 
 	mir := newMirror()
 	// Keep only one unhandled press so double clicks cannot skip a screen.
@@ -238,7 +233,11 @@ func run(o options) error {
 			return nil
 		case caps := <-probeDone:
 			view.SetProbe(caps)
-			_ = logger.WriteSession(sessionText(o, caps, started))
+			text := sessionText(o, caps, started)
+			if buzzerErr != nil {
+				text += "buzzer: " + buzzerErr.Error() + "\n"
+			}
+			_ = logger.WriteSession(text)
 			if caps.Fatal() {
 				// Nothing to measure: hand the channel back right away.
 				_ = radio.Release(ctx)
@@ -269,13 +268,13 @@ func run(o options) error {
 				return err
 			}
 		case <-engine.Updates():
-			_ = tick.Set(view.TickInterval(engine.Snapshot()))
+			tickNS.Store(int64(view.TickInterval(engine.Snapshot())))
 			if err := redraw(); err != nil {
 				return err
 			}
 		case now := <-ticker.C:
 			changed := view.Advance(now)
-			_ = tick.Set(view.TickInterval(engine.Snapshot()))
+			tickNS.Store(int64(view.TickInterval(engine.Snapshot())))
 			if changed || now.Minute() != minute {
 				minute = now.Minute()
 				if err := redraw(); err != nil {
@@ -288,6 +287,25 @@ func run(o options) error {
 			if err := maintainDisplayOwnership(fb, displayedFrame, &scratch); err != nil {
 				return err
 			}
+		}
+	}
+}
+
+// tickLoop beeps 30 ms every interval while lock-on is active (interval > 0),
+// polling every 250 ms when idle, until ctx is cancelled.
+func tickLoop(ctx context.Context, b *Buzzer, interval *atomic.Int64) {
+	for {
+		wait := 250 * time.Millisecond
+		if d := time.Duration(interval.Load()); d > 0 {
+			b.Beep(30 * time.Millisecond)
+			wait = d
+		}
+		timer := time.NewTimer(wait)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return
+		case <-timer.C:
 		}
 	}
 }
