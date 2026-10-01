@@ -43,6 +43,7 @@ const (
 	TrendRising    = "RISING"
 	TrendFalling   = "FALLING"
 	TrendSteady    = "STEADY"
+	tuneFailLimit  = 3 // consecutive overview tune failures before a channel is skipped
 	lockHistoryLen = 60
 	trendWindow    = 10
 )
@@ -92,6 +93,7 @@ type Engine struct {
 	smooth     map[Channel]float64
 	smoothAt   map[Channel]time.Time
 	skipped    map[Channel]bool
+	tuneFails  map[Channel]int
 	lock       *LockView
 	lockRaw    []int
 	channels5  []Channel
@@ -107,7 +109,7 @@ func NewEngine(cfg EngineConfig, radio Radio, inv *Inventory, ble *BLECounter, s
 	return &Engine{
 		cfg: cfg, radio: radio, inv: inv, ble: ble, sink: sink, now: now,
 		views: map[Channel]ChannelView{}, smooth: map[Channel]float64{}, smoothAt: map[Channel]time.Time{},
-		skipped: map[Channel]bool{}, updates: make(chan struct{}, 1),
+		skipped: map[Channel]bool{}, tuneFails: map[Channel]int{}, updates: make(chan struct{}, 1),
 	}
 }
 
@@ -189,8 +191,10 @@ func (e *Engine) Step(ctx context.Context) {
 			e.queue = e.sweepPlanLocked()
 		}
 		if len(e.queue) == 0 {
+			// Every channel is skipped: forget the failures and back off.
+			e.skipped, e.tuneFails = map[Channel]bool{}, map[Channel]int{}
 			e.mu.Unlock()
-			sleepCtx(ctx, e.cfg.Dwell)
+			sleepCtx(ctx, e.cfg.RetryBackoff)
 			return
 		}
 		ch, e.queue = e.queue[0], e.queue[1:]
@@ -201,6 +205,10 @@ func (e *Engine) Step(ctx context.Context) {
 
 func (e *Engine) sweepPlanLocked() []Channel {
 	e.cycle++
+	if e.cycle%20 == 0 {
+		// Retry channels that failed to tune earlier in the session.
+		e.skipped, e.tuneFails = map[Channel]bool{}, map[Channel]int{}
+	}
 	plan := e.bandChannelsLocked(e.band)
 	if e.cycle%3 == 0 {
 		plan = append(plan, e.bandChannelsLocked(e.band.Other())...)
@@ -231,7 +239,10 @@ func (e *Engine) measure(ctx context.Context, ch Channel, d time.Duration, mode 
 		}
 		e.mu.Lock()
 		if mode != ModeLock {
-			e.skipped[ch] = true
+			e.tuneFails[ch]++
+			if e.tuneFails[ch] >= tuneFailLimit {
+				e.skipped[ch] = true
+			}
 		}
 		e.radioErr = fmt.Sprintf("CANNOT LOCK CH %d", ch.Number)
 		e.publishLocked()
@@ -241,6 +252,9 @@ func (e *Engine) measure(ctx context.Context, ch Channel, d time.Duration, mode 
 		}
 		return
 	}
+	e.mu.Lock()
+	delete(e.tuneFails, ch)
+	e.mu.Unlock()
 	stats := NewDwellStats(e.cfg.DefaultRateKbps)
 	if err := e.radio.Capture(ctx, d, stats.Add); err != nil || ctx.Err() != nil {
 		if ctx.Err() != nil {

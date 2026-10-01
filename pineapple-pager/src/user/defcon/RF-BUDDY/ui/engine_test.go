@@ -83,13 +83,48 @@ func TestEngineSkipsChannelThatFailsToTune(t *testing.T) {
 	ch11 := Channel{Band24, 11}
 	r.failTune[ch11] = true
 	e := newTestEngine(r, clock, nil, "")
-	steps(e, 11)
-	if !e.Snapshot().Channels24[10].Skipped {
-		t.Fatal("channel 11 must be marked skipped")
+	steps(e, 11) // cycle 1: first failure
+	if e.Snapshot().Channels24[10].Skipped {
+		t.Fatal("channel 11 must not be skipped after one failure")
 	}
-	steps(e, 10)
-	if got := r.attemptCount(ch11); got != 1 {
-		t.Fatalf("channel 11 tune attempts = %d, want 1 (skipped for the session)", got)
+	for r.attemptCount(ch11) < 3 {
+		steps(e, 1)
+	}
+	if !e.Snapshot().Channels24[10].Skipped {
+		t.Fatal("channel 11 must be skipped after three consecutive failures")
+	}
+	steps(e, 40) // finish cycle 3 and run all of cycle 4
+	if got := r.attemptCount(ch11); got != 3 {
+		t.Fatalf("channel 11 tune attempts = %d, want 3 (skipped afterwards)", got)
+	}
+}
+
+func TestEngineRetriesSkippedChannelsWhenAllFail(t *testing.T) {
+	clock := newFakeClock()
+	r := newFakeRadio(clock)
+	all := Channels24()
+	for _, n := range default5GHz {
+		all = append(all, Channel{Band5, n})
+	}
+	for _, ch := range all {
+		r.failTune[ch] = true
+	}
+	e := newTestEngine(r, clock, nil, "")
+	backoff := 20 * time.Millisecond
+	e.cfg.RetryBackoff = backoff
+	ch1 := Channel{Band24, 1}
+	steps(e, 11+11+len(all)) // cycles 1-3: every channel reaches three failures
+	if got := r.attemptCount(ch1); got != 3 {
+		t.Fatalf("channel 1 attempts = %d, want 3", got)
+	}
+	start := time.Now()
+	steps(e, 1) // plan is empty: clear skips and back off
+	if took := time.Since(start); took < backoff {
+		t.Fatalf("empty plan step took %v, want >= %v", took, backoff)
+	}
+	steps(e, 1)
+	if got := r.attemptCount(ch1); got <= 3 {
+		t.Fatalf("channel 1 attempts = %d, want a retry after the skips were cleared", got)
 	}
 }
 
