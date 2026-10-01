@@ -1,10 +1,13 @@
 #!/bin/bash
-# Install the RF-BUDDY payload (only) on a USB-connected Pager over SSH and make
-# sure the user/defcon category is listed in the Payloads menu.
+# Install one payload from user/defcon on a USB-connected Pager over SSH and
+# make sure the user/defcon category is listed in the Payloads menu. Each
+# payload is deployed on its own; a deploy never touches the other payload.
 #
-#   ./deploy.sh              build, then deploy
-#   ./deploy.sh --dry-run    show what would run on the Pager
-#   ./deploy.sh --skip-build deploy the existing library/
+#   ./deploy.sh                           build, then deploy RF-BUDDY
+#   ./deploy.sh --payload DEFCON-DEFENSE  build, then deploy DEFCON Defense
+#   ./deploy.sh --payload all             deploy both, one after the other
+#   ./deploy.sh --dry-run                 show what would run on the Pager
+#   ./deploy.sh --skip-build              deploy the existing library/
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 PAGER_HOST="${PAGER_HOST:-root@172.16.52.1}"
@@ -14,54 +17,87 @@ BACKUP_ROOT="${PAGER_BACKUP_ROOT:-/mmc/root/payload-backups}"
 SSH="${PAGER_SSH:-ssh}"
 DRY_RUN=0
 SKIP_BUILD=0
+PAYLOAD="RF-BUDDY"
 
-for arg in "$@"; do
-  case "$arg" in
+while [ $# -gt 0 ]; do
+  case "$1" in
     --dry-run) DRY_RUN=1 ;;
     --skip-build) SKIP_BUILD=1 ;;
-    -h|--help) sed -n '2,8p' "$0"; exit 0 ;;
-    *) echo "ERROR: unknown option $arg" >&2; exit 2 ;;
+    --payload)
+      [ $# -ge 2 ] || { echo "ERROR: --payload needs a name" >&2; exit 2; }
+      PAYLOAD="$2"; shift ;;
+    -h|--help) sed -n '2,10p' "$0"; exit 0 ;;
+    *) echo "ERROR: unknown option $1" >&2; exit 2 ;;
   esac
+  shift
 done
+
+case "$PAYLOAD" in
+  RF-BUDDY|DEFCON-DEFENSE) NAMES="$PAYLOAD" ;;
+  all) NAMES="RF-BUDDY DEFCON-DEFENSE" ;;
+  *) echo "ERROR: unknown payload $PAYLOAD (use RF-BUDDY, DEFCON-DEFENSE or all)" >&2; exit 2 ;;
+esac
+
+binary_for() {
+  case "$1" in
+    RF-BUDDY) echo rf-buddy-ui ;;
+    DEFCON-DEFENSE) echo defcon-ui ;;
+  esac
+}
 
 if [ "$SKIP_BUILD" != "1" ]; then
   OUT="$LIBRARY" bash "$HERE/build.sh"
 fi
-SRC="$LIBRARY/user/defcon/RF-BUDDY"
-if [ ! -d "$SRC" ] || [ ! -e "$SRC/rf-buddy-ui" ]; then
-  echo "ERROR: $SRC is missing or has no rf-buddy-ui; run ./build.sh" >&2
-  exit 1
-fi
 
-# Runs on the Pager. Extracts RF-BUDDY to a staging folder, moves any previous
-# RF-BUDDY into a timestamped backup (never deleting it), swaps the new one in,
-# and registers the menu category. Touches no other payload.
-REMOTE_SCRIPT="set -e
+for NAME in $NAMES; do
+  BIN="$(binary_for "$NAME")"
+  SRC="$LIBRARY/user/defcon/$NAME"
+  if [ ! -d "$SRC" ] || [ ! -e "$SRC/$BIN" ]; then
+    echo "ERROR: $SRC is missing or has no $BIN; run ./build.sh" >&2
+    exit 1
+  fi
+
+  # DEFCON Defense used to live at user/general/DEFCON_DEFENSE; move that old
+  # copy into the same backup so the menu never shows two DEFCON Defenses.
+  LEGACY=""
+  if [ "$NAME" = "DEFCON-DEFENSE" ]; then
+    LEGACY="if [ -d '$REMOTE_ROOT/user/general/DEFCON_DEFENSE' ]; then
+  mkdir -p \"\$BK\"; mv '$REMOTE_ROOT/user/general/DEFCON_DEFENSE' \"\$BK/general-DEFCON_DEFENSE\"
+  echo \"moved old user/general/DEFCON_DEFENSE to \$BK\"
+fi"
+  fi
+
+  # Runs on the Pager. Extracts the payload to a staging folder, moves any
+  # previous copy into a timestamped backup (never deleting it), swaps the new
+  # one in, and registers the menu category. Touches no other payload.
+  REMOTE_SCRIPT="set -e
 mkdir -p '$REMOTE_ROOT/user/defcon'
 cd '$REMOTE_ROOT/user/defcon'
 TS=\$(date +%Y%m%d-%H%M%S)
 BK='$BACKUP_ROOT'/\$TS
-rm -rf RF-BUDDY.new && mkdir RF-BUDDY.new
-tar -C RF-BUDDY.new -xf -
-if [ -d RF-BUDDY ]; then
-  mkdir -p \"\$BK\"; mv RF-BUDDY \"\$BK/RF-BUDDY\"
-  echo \"backup: \$BK/RF-BUDDY\"
+rm -rf $NAME.new && mkdir $NAME.new
+tar -C $NAME.new -xf -
+if [ -d $NAME ]; then
+  mkdir -p \"\$BK\"; mv $NAME \"\$BK/$NAME\"
+  echo \"backup: \$BK/$NAME\"
 fi
-mv RF-BUDDY.new RF-BUDDY
-chmod 755 RF-BUDDY/rf-buddy-ui
+mv $NAME.new $NAME
+chmod 755 $NAME/$BIN
+$LEGACY
 if ! uci -q get 'payloads.@directories[0].payloaddir' | tr ' ' '\n' | grep -qx 'user/defcon'; then
   uci add_list 'payloads.@directories[0].payloaddir=user/defcon'
   uci commit payloads
   echo 'registered user/defcon in the Payloads menu'
 fi
-echo 'deployed: RF-BUDDY'
+echo 'deployed: $NAME'
 echo 'If the defcon folder does not appear in Payloads, reboot the Pager.'"
 
-if [ "$DRY_RUN" = "1" ]; then
-  echo "DRY RUN: would stream $SRC to $PAGER_HOST:$REMOTE_ROOT/user/defcon/RF-BUDDY and run:"
-  printf '%s\n' "$REMOTE_SCRIPT"
-  exit 0
-fi
+  if [ "$DRY_RUN" = "1" ]; then
+    echo "DRY RUN: would stream $SRC to $PAGER_HOST:$REMOTE_ROOT/user/defcon/$NAME and run:"
+    printf '%s\n' "$REMOTE_SCRIPT"
+    continue
+  fi
 
-COPYFILE_DISABLE=1 tar --no-xattrs --no-mac-metadata -C "$SRC" -cf - . \
-  | "$SSH" -o BatchMode=yes -o ConnectTimeout=5 "$PAGER_HOST" "$REMOTE_SCRIPT"
+  COPYFILE_DISABLE=1 tar --no-xattrs --no-mac-metadata -C "$SRC" -cf - . \
+    | "$SSH" -o BatchMode=yes -o ConnectTimeout=5 "$PAGER_HOST" "$REMOTE_SCRIPT"
+done

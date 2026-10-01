@@ -98,4 +98,37 @@ FAKE_SSH_EXEC=1 PATH="$STUBS:$PATH" PAGER_PAYLOAD_ROOT="$PR" PAGER_BACKUP_ROOT="
 assert_rc "$?" "0" "second deploy succeeds"
 assert_eq "$(grep -c '^add_list' "$UCI_CALLS")" "1" "second deploy does not re-register the category"
 
+# --- DEFCON-DEFENSE is deployed on its own --------------------------------
+mkdir -p "$LIB/user/defcon/DEFCON-DEFENSE"
+echo dd > "$LIB/user/defcon/DEFCON-DEFENSE/payload.sh"
+echo ui > "$LIB/user/defcon/DEFCON-DEFENSE/defcon-ui"
+
+out="$(PAGER_LIBRARY="$LIB" PAGER_SSH="$FAKE_SSH" bash "$ROOT/deploy.sh" --payload DEFCON-DEFENSE --skip-build --dry-run)"
+assert_rc "$?" "0" "DEFCON-DEFENSE dry run succeeds"
+printf '%s' "$out" | grep -q 'general/DEFCON_DEFENSE'
+assert_rc "$?" "0" "DEFCON-DEFENSE deploy retires the old user/general copy"
+printf '%s' "$out" | grep -q 'RF-BUDDY'
+assert_rc "$?" "1" "DEFCON-DEFENSE deploy never mentions RF-BUDDY"
+
+out="$(PAGER_LIBRARY="$LIB" PAGER_SSH="$FAKE_SSH" bash "$ROOT/deploy.sh" --payload all --skip-build --dry-run)"
+printf '%s' "$out" | grep -q 'deployed: RF-BUDDY' && printf '%s' "$out" | grep -q 'deployed: DEFCON-DEFENSE'
+assert_rc "$?" "0" "--payload all deploys both payloads"
+
+PAGER_LIBRARY="$LIB" PAGER_SSH="$FAKE_SSH" bash "$ROOT/deploy.sh" --payload NOPE --skip-build --dry-run >/dev/null 2>&1
+assert_rc "$?" "2" "unknown payload name is rejected"
+
+cp -R "$PR/user/defcon/RF-BUDDY" "$TMP/rf-before"
+FAKE_SSH_EXEC=1 PATH="$STUBS:$PATH" PAGER_PAYLOAD_ROOT="$PR" PAGER_BACKUP_ROOT="$BR" \
+  PAGER_LIBRARY="$LIB" PAGER_SSH="$FAKE_SSH" bash "$ROOT/deploy.sh" --payload DEFCON-DEFENSE --skip-build >/dev/null
+assert_rc "$?" "0" "DEFCON-DEFENSE deploy executes against a temp Pager root"
+assert_eq "$(cat "$PR/user/defcon/DEFCON-DEFENSE/payload.sh")" "dd" "DEFCON-DEFENSE is installed in user/defcon"
+[ -x "$PR/user/defcon/DEFCON-DEFENSE/defcon-ui" ]; assert_rc "$?" "0" "DEFCON-DEFENSE UI binary is executable"
+[ ! -e "$PR/user/general/DEFCON_DEFENSE" ]; assert_rc "$?" "0" "old user/general/DEFCON_DEFENSE is gone from the menu"
+LEG="$(find "$BR" -path '*/general-DEFCON_DEFENSE/trusted_aps.conf' | head -n 1)"
+[ -n "$LEG" ] && [ "$(cat "$LEG")" = "mac" ]; assert_rc "$?" "0" "old DEFCON copy (with its config) is kept in the backup"
+diff -r "$TMP/rf-before" "$PR/user/defcon/RF-BUDDY" >/dev/null
+assert_rc "$?" "0" "RF-BUDDY is untouched by a DEFCON-DEFENSE deploy"
+diff -r "$TMP/other-before" "$PR/user/defcon/OTHER" >/dev/null
+assert_rc "$?" "0" "user/defcon/OTHER is untouched by a DEFCON-DEFENSE deploy"
+
 exit "$FAIL"

@@ -11,11 +11,11 @@ REC="$TMP/recorder.log"
 : > "$REC"
 
 mkdir -p "$TMP/runtime"
-cp "$ROOT/src/user/general/DEFCON_DEFENSE/payload.sh" "$TMP/runtime/payload.sh"
+cp "$ROOT/src/user/defcon/DEFCON-DEFENSE/payload.sh" "$TMP/runtime/payload.sh"
 DEFCON_DEFENSE_SOURCE_ONLY=1 \
 DEFCON_DEFENSE_LOOT_DIR="$TMP/runtime-loot" \
 DEFCON_DEFENSE_PCAP_DIR="$TMP/runtime-pcap" \
-DEFCON_DEFENSE_INSTALL_DIR="$ROOT/src/user/general/DEFCON_DEFENSE" \
+DEFCON_DEFENSE_INSTALL_DIR="$ROOT/src/user/defcon/DEFCON-DEFENSE" \
   bash "$TMP/runtime/payload.sh"
 assert_rc "$?" "0" "temporary runner resolves support files from stable installed directory"
 
@@ -29,9 +29,9 @@ PROMPT()      { printf 'PROMPT\t%s\n' "$*" >> "$REC"; }
 DEFCON_DEFENSE_SOURCE_ONLY=1
 DEFCON_DEFENSE_LOOT_DIR="$TMP/loot"
 DEFCON_DEFENSE_PCAP_DIR="$TMP/pcap"
-DEFCON_DEFENSE_INSTALL_DIR="$ROOT/src/user/general/DEFCON_DEFENSE"
+DEFCON_DEFENSE_INSTALL_DIR="$ROOT/src/user/defcon/DEFCON-DEFENSE"
 export DEFCON_DEFENSE_SOURCE_ONLY DEFCON_DEFENSE_LOOT_DIR DEFCON_DEFENSE_PCAP_DIR DEFCON_DEFENSE_INSTALL_DIR
-. "$ROOT/src/user/general/DEFCON_DEFENSE/payload.sh"
+. "$ROOT/src/user/defcon/DEFCON-DEFENSE/payload.sh"
 
 # Pager 24.10.1 does not reliably support `pgrep -x`. The exact pidof path
 # must report the firmware UI state without falling back to fuzzy matching.

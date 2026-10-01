@@ -8,7 +8,7 @@ a repeated same-offense**, stay quiet on ambient DEF CON noise.
 
 | Payload | Type | Warns you when… |
 |---|---|---|
-| `user/general/DEFCON_DEFENSE` | on-demand | runs a dedicated 480x222 full-screen Pager application with the designed general, threat-detail, and PCAP-evidence interfaces; it supplies live passive 2.4/5 GHz Recon, background trusted/watched-network correlation, bounded investigation capture, evidence verification, and later download through Virtual Pager |
+| `user/defcon/DEFCON-DEFENSE` | on-demand | runs a dedicated 480x222 full-screen Pager application with the designed general, threat-detail, and PCAP-evidence interfaces; it supplies live passive 2.4/5 GHz Recon, background trusted/watched-network correlation, bounded investigation capture, evidence verification, and later download through Virtual Pager |
 | `user/defcon/RF-BUDDY` | on-demand | separate, standalone full-screen 2.4/5 GHz interference finder (also viewable at `http://172.16.52.1:1474`): a live channel overview, a 1-second lock-on meter with a buzzer tick, and a survey log, so you can walk an office and find where Wi-Fi and Bluetooth suffer and why (interference, congestion, overlap, Bluetooth density, weak coverage). Recon keeps running, locked to one channel at a time |
 | `alerts/deauth_flood_detected/defcon_sentry` | auto (custom) | the **same** attacker sustains a deauth/disassoc flood (3 hits/2 min, 5 min cooldown; watched MACs escalate instantly), then immediately starts a bounded passive PCAP when storage and concurrency guards allow |
 | `alerts/pineapple_client_connected/defcon_honeypot` | auto (custom) | a client joins **your decoy AP** (first sighting per client, dedup reconnects; flags randomized/private MACs — most modern phones use these, so it's expected, not alarming) |
@@ -33,15 +33,18 @@ PMKID attacks, handshake capture/crack, captive portals, PineAP karma/rogue-AP.
    For a Pager-ready archive with macOS metadata stripped, run `./package.sh`;
    it writes the archive and checksum manifest under `pineapple-pager/dist/`.
 2. With the Pager on USB, run `./deploy.sh` (key-based SSH to `root@172.16.52.1`).
-   It installs RF-BUDDY only, into `/root/payloads/user/defcon/RF-BUDDY/`; no
-   other payload is sent or touched. Any previous RF-BUDDY is moved to
-   `/mmc/root/payload-backups/<timestamp>/RF-BUDDY`, and the script registers the
-   `defcon` folder in the Payloads menu (`/etc/config/payloads`). Use
-   `./deploy.sh --dry-run` to preview. A firmware update may reset the menu
-   list; re-run `./deploy.sh` afterwards. To install over USB storage instead,
-   copy only `library/user/defcon/RF-BUDDY` into
+   `./deploy.sh` installs RF-BUDDY; `./deploy.sh --payload DEFCON-DEFENSE`
+   installs DEFCON Defense; `./deploy.sh --payload all` installs both. Each
+   payload is deployed on its own into `/root/payloads/user/defcon/<name>/` and
+   never touches the other. Any previous copy is moved to
+   `/mmc/root/payload-backups/<timestamp>/<name>`; a DEFCON Defense deploy also
+   moves an old `user/general/DEFCON_DEFENSE` there so the menu shows one copy.
+   The script registers the `defcon` folder in the Payloads menu
+   (`/etc/config/payloads`). Use `--dry-run` to preview. A firmware update may
+   reset the menu list; re-run the deploy afterwards. To install over USB
+   storage instead, copy the wanted folders from `library/user/defcon/` into
    `/mmc/root/payloads/user/defcon/` and add `list payloaddir 'user/defcon'` to
-   `/etc/config/payloads`. DEFCON Defense stays at `user/general/DEFCON_DEFENSE`.
+   `/etc/config/payloads`.
 3. **Arm the auto-hooks:** make sure these directories have **no** `DISABLED.`
    prefix on the device (or enable them in the on-device **Alerts** menu):
    - `alerts/deauth_flood_detected/defcon_sentry`
@@ -55,7 +58,7 @@ PMKID attacks, handshake capture/crack, captive portals, PineAP karma/rogue-AP.
 
 - **Always-on (no action needed once armed):** `defcon_sentry`, `defcon_honeypot`
   — they fire from the engine while you do anything else.
-- **Unified RF monitoring:** open `DEFCON_DEFENSE`. The custom application
+- **Unified RF monitoring:** open `DEFCON-DEFENSE` (Payloads → defcon). The custom application
   renders directly on the physical 480x222 display and mirrors the same canvas
   in Virtual Pager. The primary views are **general**, **Observed APs**,
   **My Watch List**, **threat detail**, and **evidence browser**. On the general screen,
@@ -110,7 +113,7 @@ Each custom handler has a CONFIG block at the top of its `payload.sh`:
   `KEY_MODE`, `WATCH_MACS` (put **your** device MACs here for instant targeted
   warnings).
 - `defcon_honeypot`: `COOLDOWN_SECONDS` (default `600`).
-- `DEFCON_DEFENSE`: `MONITOR_INTERVAL`, `NEW_BSSID_THRESHOLD`,
+- `DEFCON-DEFENSE`: `MONITOR_INTERVAL`, `NEW_BSSID_THRESHOLD`,
   `OBSERVATION_WINDOW`, `ALERT_COOLDOWN`, and `MIN_NEW_BSSID_SIGNAL`. Authorized
   SSID/BSSID/channel mappings live in its non-secret `trusted_aps.conf` file.
 
