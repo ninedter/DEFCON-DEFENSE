@@ -41,7 +41,7 @@ nearby Bluetooth count. The buzzer tick plays faster as the score rises.
 | B | back to the overview |
 
 **BT tab** — nearby Bluetooth LE devices, browsed in three levels: BRANDS
-(Apple, Microsoft, Nanoleaf, ... UNKNOWN for random addresses with no clues),
+(Apple, Microsoft, Nanoleaf, ... UNKNOWN collects devices with no maker ID, service hint or name),
 then the TYPES of that brand (Find My, Nearby, AirPlay, ...), then the DEVICES of
 that type, strongest first; each device row shows its advertised name, or its
 address when it has none. The right panel summarises the highlighted row; at
@@ -99,7 +99,8 @@ time and returns to normal hopping when you exit. The Bluetooth scan is passive.
 Open **http://172.16.52.1:1474** for RF-BUDDY's own viewer: a live copy of the
 screen with on-page buttons. The viewer has no login, so it listens only on the
 Pager's USB management address (`172.16.52.1`), never on a Wi-Fi network the
-Pager has joined.
+Pager has joined. Buttons only work from the viewer's own on-page buttons (or
+keyboard keys); direct cross-site requests are refused.
 
 While RF-BUDDY runs, the stock Pager menu and the stock Virtual Pager (`:1471`)
 are paused; they return when you press B.

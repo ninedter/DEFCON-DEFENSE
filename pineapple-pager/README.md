@@ -40,7 +40,7 @@ PMKID attacks, handshake capture/crack, captive portals, PineAP karma/rogue-AP.
    `/mmc/root/payload-backups/<timestamp>/<name>`; a DEFCON Defense deploy also
    moves an old `user/general/DEFCON_DEFENSE` there so the menu shows one copy.
    Only the newest deploy backup of each payload is kept (set
-   `PAGER_BACKUP_KEEP=n` to keep more); folders you create yourself in that
+   `PAGER_BACKUP_KEEP=n`, n >= 1, to keep more); folders you create yourself in that
    directory are never touched.
    The script registers the `defcon` folder in the Payloads menu
    (`/etc/config/payloads`). Use `--dry-run` to preview. A firmware update may
