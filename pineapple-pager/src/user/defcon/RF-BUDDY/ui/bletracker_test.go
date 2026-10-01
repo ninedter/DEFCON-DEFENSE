@@ -2,6 +2,7 @@ package main
 
 import (
 	"reflect"
+	"strconv"
 	"testing"
 	"time"
 )
@@ -74,10 +75,16 @@ func TestTrackerDevices(t *testing.T) {
 	}
 
 	// outside the 2 s window the smoothed value falls back to the last advert
-	later := t0.Add(20 * time.Second)
-	for _, d := range tr.Devices(later) {
+	// while that advert is under 5 s old, and to -100 after that
+	for _, d := range tr.Devices(t0.Add(4 * time.Second)) {
 		if d.Addr == "AA" && d.RSSI != -60 {
 			t.Errorf("fallback %+v", d)
+		}
+	}
+	later := t0.Add(20 * time.Second)
+	for _, d := range tr.Devices(later) {
+		if d.Addr == "AA" && d.RSSI != -100 {
+			t.Errorf("stale fallback %+v", d)
 		}
 	}
 	if got := tr.Count(later); got != 4 {
@@ -230,5 +237,54 @@ func TestStickyAppearanceAndHint(t *testing.T) {
 	d := tr.Devices(t0.Add(time.Second))[0]
 	if d.Appearance != "EARBUD" || d.Brand != "GOOGLE" || d.Type != "EARBUD" || !d.FirstSeen.Equal(t0) {
 		t.Errorf("%+v", d)
+	}
+}
+
+func TestTrackerCapsDevicesEvictingOldest(t *testing.T) {
+	tr := NewBLETracker(time.Hour)
+	addr := func(i int) string { return "A" + strconv.Itoa(i) }
+	for i := 0; i < bleMaxDevices; i++ {
+		tr.Observe(adv(addr(i), -70), t0.Add(time.Duration(i)*time.Millisecond))
+	}
+	tr.Track(addr(0)) // oldest, but tracked: must survive
+	now := t0.Add(time.Minute)
+	tr.Observe(adv("NEW", -60), now)
+	if n := tr.Count(now); n != bleMaxDevices {
+		t.Fatalf("count = %d, want %d", n, bleMaxDevices)
+	}
+	have := map[string]bool{}
+	for _, d := range tr.Devices(now) {
+		have[d.Addr] = true
+	}
+	if !have[addr(0)] || !have["NEW"] || have[addr(1)] {
+		t.Fatalf("tracked kept=%v new=%v oldest-untracked evicted=%v", have[addr(0)], have["NEW"], !have[addr(1)])
+	}
+}
+
+func TestTrackedGoesLostWhenOnlyAddressSightings(t *testing.T) {
+	tr := NewBLETracker(time.Minute)
+	tr.Track("AA")
+	tr.Observe(adv("AA", -60), t0)
+	// hcidump died: hcitool keeps reporting presence without RSSI
+	for s := 1; s <= 10; s++ {
+		tr.ObserveAddr("AA", t0.Add(time.Duration(s)*time.Second))
+	}
+	now := t0.Add(10 * time.Second)
+	v := tr.Tracked(now)
+	if !v.Lost || v.RSSI != bleNoSignal {
+		t.Fatalf("stale real advert: Lost=%v RSSI=%d", v.Lost, v.RSSI)
+	}
+	if !v.LastSeen.Equal(now) {
+		t.Fatalf("LastSeen = %v, device lists still use presence", v.LastSeen)
+	}
+	// still fresh 3 s after the real advert: falls back to the last RSSI
+	if v := tr.Tracked(t0.Add(3 * time.Second)); v.Lost || v.RSSI != -60 {
+		t.Fatalf("fresh: Lost=%v RSSI=%d", v.Lost, v.RSSI)
+	}
+	// addr-only device never seen with RSSI is lost
+	tr.Track("BB")
+	tr.ObserveAddr("BB", now)
+	if v := tr.Tracked(now); !v.Lost {
+		t.Fatal("never-advertised tracked device must be Lost")
 	}
 }

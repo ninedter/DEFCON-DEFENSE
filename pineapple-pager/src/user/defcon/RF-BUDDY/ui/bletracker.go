@@ -10,11 +10,12 @@ import (
 )
 
 const (
-	bleLost      = 5 * time.Second
-	bleSmooth    = 2 * time.Second
-	bleRateWin   = 10 * time.Second
-	bleNoSignal  = -100
-	bleTrendStep = 3.0
+	bleLost       = 5 * time.Second
+	bleMaxDevices = 1024
+	bleSmooth     = 2 * time.Second
+	bleRateWin    = 10 * time.Second
+	bleNoSignal   = -100
+	bleTrendStep  = 3.0
 )
 
 // BLEDevice is the display state of one tracked BLE address.
@@ -64,7 +65,8 @@ type bleEntry struct {
 	tx       int
 	hasTx    bool
 	first    time.Time
-	last     time.Time
+	last     time.Time   // any sighting, with or without RSSI
+	lastAdv  time.Time   // last real advert (decoded, with RSSI)
 	recent   []bleSample // adverts in the last bleRateWin
 }
 
@@ -87,6 +89,9 @@ func NewBLETracker(expire time.Duration) *BLETracker {
 func (t *BLETracker) entry(addr string, at time.Time) *bleEntry {
 	e := t.devs[addr]
 	if e == nil {
+		if len(t.devs) >= bleMaxDevices {
+			t.evictOldestLocked()
+		}
 		e = &bleEntry{addr: addr, company: -1, lastRSSI: bleNoSignal, peak: bleNoSignal, first: at}
 		t.devs[addr] = e
 	}
@@ -94,6 +99,22 @@ func (t *BLETracker) entry(addr string, at time.Time) *bleEntry {
 		e.last = at
 	}
 	return e
+}
+
+// evictOldestLocked drops the untracked entry with the oldest last-seen.
+func (t *BLETracker) evictOldestLocked() {
+	var victim *bleEntry
+	for addr, e := range t.devs {
+		if addr == t.tracked {
+			continue
+		}
+		if victim == nil || e.last.Before(victim.last) || (e.last.Equal(victim.last) && e.addr < victim.addr) {
+			victim = e
+		}
+	}
+	if victim != nil {
+		delete(t.devs, victim.addr)
+	}
 }
 
 func (t *BLETracker) Observe(a Advert, at time.Time) {
@@ -120,6 +141,9 @@ func (t *BLETracker) Observe(a Advert, at time.Time) {
 		e.tx, e.hasTx = a.TxPower, true
 	}
 	e.lastRSSI = a.RSSI
+	if at.After(e.lastAdv) {
+		e.lastAdv = at
+	}
 	if a.RSSI > e.peak {
 		e.peak = a.RSSI
 	}
@@ -201,9 +225,12 @@ func (e *bleEntry) device(now time.Time) BLEDevice {
 			cnt++
 		}
 	}
-	rssi := e.lastRSSI
-	if n > 0 {
+	rssi := bleNoSignal
+	switch {
+	case n > 0:
 		rssi = int(math.Round(float64(sum) / float64(n)))
+	case !e.lastAdv.IsZero() && now.Sub(e.lastAdv) < bleLost:
+		rssi = e.lastRSSI
 	}
 	span := now.Sub(e.first).Seconds()
 	if span > bleRateWin.Seconds() {
@@ -345,7 +372,7 @@ func (t *BLETracker) Tracked(now time.Time) *BLETrackView {
 	}
 	v := &BLETrackView{BLEDevice: e.device(now), PeakAt: t.tPeakAt}
 	v.Peak = t.tPeak
-	v.Lost = e.last.IsZero() || now.Sub(e.last) >= bleLost
+	v.Lost = e.lastAdv.IsZero() || now.Sub(e.lastAdv) >= bleLost
 	v.History = t.history(now)
 	v.Trend = bleTrend(v.History)
 	return v
