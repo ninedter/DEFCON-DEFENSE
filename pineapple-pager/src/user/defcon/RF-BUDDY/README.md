@@ -55,8 +55,9 @@ nearby Bluetooth count. A tick plays faster as the score rises.
 Edit the CONFIG block at the top of `payload.sh`:
 
 - `OFFICE_SSID` — your office network name. Enables `WEAK COVERAGE`.
-- `TICK_RINGTONE` — a short ringtone on the Pager for the lock-on tick; without
-  it the tick falls back to a short vibration.
+- `TICK_RINGTONE` — the lock-on tick. By default a short inline RTTTL beep; set
+  it to any ringtone name or RTTTL string. It is played with `RINGTONE` and
+  falls back to `VIBRATE` with the same pattern.
 - Thresholds (`RETRY_HIGH_PCT`, `AIRTIME_HIGH_PCT`, …) are documented inline.
 
 Recon keeps running while RF-BUDDY is open; it is locked to one channel at a

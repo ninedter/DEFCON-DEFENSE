@@ -20,7 +20,7 @@ BT_DENSE_COUNT=30         # nearby BLE devices for BT DENSE
 WEAK_SIGNAL_DBM=-70       # office AP quieter than this -> WEAK COVERAGE
 LOG_MAX_MB=20             # per-session log cap
 MIN_FREE_MB=64            # pause logging below this much free storage
-TICK_RINGTONE="tick"      # short ringtone for the lock-on tick (falls back to a 40 ms vibration)
+TICK_RINGTONE="tick:d=32,o=6,b=200:c"  # lock-on tick, inline RTTTL (any ringtone name or RTTTL works)
 # ----------------------------------------------------------------------------
 
 PAYLOAD_ROOT="/root/payloads"
@@ -81,7 +81,7 @@ release_channel() {
 }
 
 tick_once() {
-  RINGTONE "$TICK_RINGTONE" >/dev/null 2>&1 || VIBRATE 40 >/dev/null 2>&1 || true
+  RINGTONE "$TICK_RINGTONE" >/dev/null 2>&1 || VIBRATE "$TICK_RINGTONE" >/dev/null 2>&1 || true
 }
 
 # The UI writes the lock-on tick interval in ms (0 = off) to $TICK_FILE.

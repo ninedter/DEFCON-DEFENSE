@@ -49,6 +49,7 @@ assert_eq "$(tr '\t' ' ' < "$REC")" "PINEAP EXAMINE CANCEL" "channel lock is han
 : > "$REC"
 RINGTONE_RC=1 tick_once
 assert_eq "$(cut -f1 "$REC" | paste -sd'|' -)" "RINGTONE|VIBRATE" "tick falls back to a vibration when the ringtone fails"
+grep -q $'^VIBRATE\ttick:d=32,o=6,b=200:c$' "$REC"; assert_rc "$?" "0" "vibration fallback uses the RTTTL pattern"
 
 : > "$REC"
 rf_lock_acquire
