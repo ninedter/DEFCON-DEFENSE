@@ -46,7 +46,7 @@ OVERRIDES = [
     ("MICROSOFT", "MICROSOFT"), ("SONY", "SONY"), ("BOSE", "BOSE"),
     ("HARMAN", "HARMAN"), ("LOGITECH", "LOGITECH"), ("GARMIN", "GARMIN"),
     ("FITBIT", "FITBIT"), ("HUAWEI", "HUAWEI"), ("XIAOMI", "XIAOMI"),
-    ("BEIJING XIAOMI", "XIAOMI"), ("AMAZON", "AMAZON"), ("LG", "LG"),
+    ("BEIJING XIAOMI", "XIAOMI"), ("ANHUI HUAMI", "AMAZFIT"), ("AMAZON", "AMAZON"), ("LG", "LG"),
     ("LENOVO", "LENOVO"), ("DELL", "DELL"), ("HEWLETT PACKARD", "HP"),
     ("HP", "HP"), ("INTEL", "INTEL"), ("QUALCOMM", "QUALCOMM"),
     ("BROADCOM", "BROADCOM"), ("REALTEK", "REALTEK"), ("MEDIATEK", "MEDIATEK"),
@@ -123,6 +123,8 @@ def has_prefix(words, prefix):
 def normalize_brand(name):
     """Return (brand, full) or ("", "") when nothing printable remains."""
     words = drop_legal(base_words(name))
+    if len(words) > 1 and words[0] == "THE":
+        words = words[1:]  # "The Kroger" -> "KROGER"
     if not words:
         return "", ""
     full = trim_words(words, FULL_CELLS)
@@ -237,7 +239,6 @@ def build_appearance(text):
     return ["%04X\t%s" % kv for kv in sorted(rows.items())]
 
 
-SKIP_OUI = ("PRIVATE", "IEEE REGISTRATION AUTHORITY", "IEEE")
 PREFIX24 = re.compile(r"^([0-9A-Fa-f]{2}):([0-9A-Fa-f]{2}):([0-9A-Fa-f]{2})$")
 
 

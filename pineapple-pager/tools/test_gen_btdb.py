@@ -93,6 +93,7 @@ class Normalize(unittest.TestCase):
             ("Bang & Olufsen A/S", "B AND O"),
             ("Beijing Xiaomi Mobile Software Co., Ltd", "XIAOMI"),
             ("LG Electronics", "LG"),
+            ("Anhui Huami Information Technology Co., Ltd.", "AMAZFIT"),
         ]:
             self.assertEqual(self.brand(name), want, name)
 
@@ -113,6 +114,13 @@ class Normalize(unittest.TestCase):
         self.assertEqual(self.brand("Acme Widgets S.A."), "ACME WIDGETS")
         self.assertEqual(self.brand("Nokia L.L.C."), "NOKIA")
         self.assertEqual(self.brand("Foo B.V."), "FOO")
+
+    def test_leading_the(self):
+        self.assertEqual(self.brand("The Kroger Co."), "KROGER")
+        self.assertEqual(self.brand("The Linux Foundation"), "LINUX FOUNDATION")
+        self.assertEqual(g.normalize_brand("The Kroger Co.")[1], "KROGER")
+        self.assertEqual(self.brand("The"), "THE")  # never drop the only word
+        self.assertEqual(self.brand("Breathe The Air Inc"), "BREATHE THE")
 
     def test_ascii_and_empty(self):
         self.assertEqual(self.brand("Café Zeta"), "CAFE ZETA")
