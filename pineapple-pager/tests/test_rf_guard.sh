@@ -57,6 +57,13 @@ assert_eq "$(awk -F '\t' '$1=="00:11:22:33:44:55" {print $2}' "$SNAPSHOT")" \
 assert_eq "$(awk -F '\t' '$1=="00:11:22:33:44:55" {print $7}' "$SNAPSHOT")" \
   "10" "live inventory exposes Recon packet activity"
 
+rf_observation_is_actionable 1040 1050 45 1000
+assert_rc "$?" "0" "fresh post-launch observation is actionable"
+rf_observation_is_actionable 900 1050 45 800
+assert_rc "$?" "1" "stale Recon cache is not actionable"
+rf_observation_is_actionable 1000 1050 60 1000
+assert_rc "$?" "1" "pre-launch cached observation is not replayed"
+
 WATCHED="$TMP/watched.tsv"
 rf_watch_upsert "$WATCHED" '00:11:22:33:44:55' 'SOC-Operations' 6 2.4GHz
 assert_rc "$?" "0" "watched AP is saved"
@@ -104,6 +111,17 @@ assert_eq "$(awk -F '\t' '$1=="AA:BB:CC:DD:EE:02" {print $7 ":" $8 ":" $9}' "$TH
   "DEAUTH_ACTIVITY:1:red" "threat snapshot correlates recent deauth activity in red"
 assert_eq "$(awk -F '\t' '$1=="AA:BB:CC:DD:EE:03" {count++} END {print count+0}' "$THREATS")" \
   "0" "threat snapshot excludes non-2.4/5 GHz observations"
+assert_eq "$(rf_ui_metrics "$SNAPSHOT" "$THREATS" "$WATCHED")" "1|2|2|0" \
+  "one metrics pass counts both bands, threats, and watched APs"
+
+FRESH_THREATS="$TMP/fresh-threats.tsv"
+FRESH_SNAPSHOT="$TMP/fresh-snapshot.tsv"
+awk -F '\t' -v OFS='\t' '$1=="AA:BB:CC:DD:EE:01" {$6=1040} {print}' \
+  "$SNAPSHOT" > "$FRESH_SNAPSHOT"
+rf_build_threat_snapshot "$WATCHED" "$TRUSTED" "$BASELINE" "$FRESH_SNAPSHOT" "$DEAUTH" 1050 \
+  "$FRESH_THREATS" 45 1000
+assert_eq "$(wc -l < "$FRESH_THREATS" | tr -d ' ')" "1" \
+  "threat snapshot excludes stale and pre-launch Recon rows"
 
 STATE="$TMP/state.psv"
 assert_eq "$(rf_state_should_alert "$STATE" NEW_BSSID AA:BB:CC:DD:EE:02 100 2 60 300)" "0" \

@@ -9,13 +9,16 @@
  */
 (() => {
   if (window.__defconDefenseBridgeInstalled) return;
+  const accessToken = document.currentScript?.dataset.defconDefenseToken || "";
+  if (!accessToken) return;
   window.__defconDefenseBridgeInstalled = true;
-  window.__defconDefenseBridgeVersion = "4.3.1";
+  window.__defconDefenseBridgeVersion = "4.4.0";
 
   const baseEndpoint = `${window.location.protocol}//${window.location.hostname}:1472`;
   const endpoint = `${baseEndpoint}/screen.png`;
+  const tokenQuery = `token=${encodeURIComponent(accessToken)}`;
   const pollTimeoutMs = 6500;
-  const buttonTimeoutMs = 950;
+  const buttonTimeoutMs = 650;
   let active = false;
   let objectUrl = null;
   let failures = 0;
@@ -27,8 +30,11 @@
   let pollTimer = null;
   let connectionGeneration = 0;
   let buttonBusy = false;
+  let pressedButton = null;
   let pressedImage = null;
   let buttonTimer = null;
+  let pendingButton = null;
+  let pendingImage = null;
 
   const buttonNames = {
     "A_BUTTON.PNG": "A",
@@ -113,24 +119,41 @@
     });
   }
 
-  function releaseButton() {
+  function releaseButton(dispatchPending = true) {
     buttonBusy = false;
     if (buttonTimer) clearTimeout(buttonTimer);
     buttonTimer = null;
     if (pressedImage) pressedImage.classList.remove("defcon-button-pending");
+    pressedButton = null;
     pressedImage = null;
+    const nextButton = dispatchPending && active ? pendingButton : null;
+    const nextImage = dispatchPending && active ? pendingImage : null;
+    pendingButton = null;
+    pendingImage = null;
+    if (nextButton) setTimeout(() => void sendButton(nextButton, nextImage), 0);
   }
 
   async function sendButton(button, img = null) {
-    if (!active || buttonBusy) return;
+    if (!active) return;
+    if (buttonBusy) {
+      // Preserve one intentional follow-up action (for example LEFT then B)
+      // instead of dropping it while the current frame is being acknowledged.
+      // Repeated presses of the same held/bounced control remain suppressed.
+      if (button !== pressedButton) {
+        pendingButton = button;
+        pendingImage = img;
+      }
+      return;
+    }
     buttonBusy = true;
+    pressedButton = button;
     pressedImage = img;
     if (pressedImage) pressedImage.classList.add("defcon-button-pending");
     buttonTimer = setTimeout(releaseButton, buttonTimeoutMs);
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 900);
     try {
-      const response = await fetch(`${baseEndpoint}/button?name=${encodeURIComponent(button)}`, {
+      const response = await fetch(`${baseEndpoint}/button?${tokenQuery}&name=${encodeURIComponent(button)}`, {
         method: "POST",
         cache: "no-store",
         signal: controller.signal,
@@ -138,7 +161,7 @@
       if (!response.ok) throw new Error("button queue busy");
       scheduleRefresh(0);
     } catch (_) {
-      releaseButton();
+      releaseButton(false);
       resetConnection(false);
     } finally {
       clearTimeout(timeout);
@@ -218,7 +241,7 @@
     inFlight = true;
     try {
       const revision = etag ? `&rev=${encodeURIComponent(etag)}` : "";
-      const response = await fetch(`${endpoint}?wait=1${revision}`, {
+      const response = await fetch(`${endpoint}?${tokenQuery}&wait=1${revision}`, {
         cache: "no-store",
         signal: controller.signal,
       });
@@ -247,7 +270,12 @@
       failures += 1;
       if (failures >= 2) {
         active = false;
-        releaseButton();
+        // The native server's frame counter starts over for each payload run.
+        // Forget the prior run's ETag before probing for a relaunch; otherwise
+        // a new `defcon-1` can look unchanged and leave the stock frame visible
+        // until the browser page is manually reloaded.
+        etag = "";
+        releaseButton(false);
         setFocusedMode(false);
       }
     } finally {

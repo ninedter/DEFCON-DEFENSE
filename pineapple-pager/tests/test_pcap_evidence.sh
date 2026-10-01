@@ -83,4 +83,11 @@ limited="$(pcap_evidence_auto_start "DEAUTH_ACTIVITY" "HIGH" "DEFCON-GUEST" \
   "AA:BB:CC:DD:EE:00" "2.4GHz" "6" "-41" || true)"
 assert_eq "${limited%%|*}" "STORAGE_LIMIT" "capture stops before the configured storage quota"
 
+pcap_evidence_clear_all
+assert_eq "$(find "$PCAP_EVIDENCE_PCAP_DIR" -type f | wc -l | tr -d ' ')" "0" \
+  "clear-all removes every managed PCAP file"
+assert_eq "$(pcap_evidence_count)" "0" "clear-all resets the evidence index"
+[ ! -e "$PCAP_EVIDENCE_STATE" ] && [ ! -e "$PCAP_EVIDENCE_DEDUPE" ]; assert_rc "$?" "0" \
+  "clear-all removes capture status and dedupe state"
+
 exit "$FAIL"

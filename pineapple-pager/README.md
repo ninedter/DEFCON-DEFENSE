@@ -57,12 +57,17 @@ PMKID attacks, handshake capture/crack, captive portals, PineAP karma/rogue-AP.
   — they fire from the engine while you do anything else.
 - **Unified RF monitoring:** open `DEFCON_DEFENSE`. The custom application
   renders directly on the physical 480x222 display and mirrors the same canvas
-  in Virtual Pager. The three primary views are the designed **general**,
-  **threat detail**, and **evidence browser** screens. On the general screen,
+  in Virtual Pager. The primary views are **general**, **Observed APs**,
+  **My Watch List**, **threat detail**, and **evidence browser**. On the general screen,
   UP/DOWN moves the highlight, A opens the selected item, B exits, and
-  LEFT/RIGHT opens evidence. In threat detail, UP/DOWN selects the next/previous
-  alert, A requests a bounded passive investigation capture, B toggles alert
-  audio, LEFT returns to general, and RIGHT opens evidence. In evidence,
+  LEFT/RIGHT opens evidence. **AP Watch List** opens the APs currently heard in
+  passive Recon; UP/DOWN selects an AP and green A adds or removes it from
+  monitoring. **Monitored Networks** opens the saved user watch list, including
+  entries that are not currently visible; green A removes an entry and RIGHT
+  returns to observed APs to add one. In threat detail, UP/DOWN selects the next/previous
+  alert, A requests a bounded passive investigation capture, B returns to
+  general, and RIGHT opens evidence. Red/B is consistently back or exit;
+  green/A confirms or opens the next step. In evidence,
   UP/DOWN selects a PCAP, LEFT/RIGHT changes page, A opens metadata and on-demand
   SHA-256 verification, and B returns to general. Passive trusted/watched-
   network correlation continues in the background. A confirmed red alert
@@ -127,6 +132,11 @@ threshold — see each payload's own comments/README.
   SSID/BSSID, band/channel, signal, duration, size, SHA-256 state, status, and path.
 - `/root/loot/pcap/` — firmware-native focused passive Recon captures.
 
+The watch list can also be maintained as a user-owned, tab-separated file with
+one `BSSID`, `SSID`, `channel`, and `band` entry per line and no header. The native **My Watch List**
+screen continues to display entries even when they are absent from the current
+Recon snapshot. Do not store passwords or PSKs in this file.
+
 Open **PCAP Evidence** to browse saved captures by time, threat, network, size,
 and status. Open a row for full details; use **Verify SHA-256** when a digest is
 needed. Digesting is intentionally on demand so a large pre-existing PCAP does
@@ -137,13 +147,14 @@ the `pcap/` folder.
 The custom UI publishes a read-only PNG mirror on device port `1472` only while
 the application is running. An idempotent bridge in the authenticated Virtual
 Pager page displays that canvas and automatically falls back to the stock Pager
-screen when the application exits. Version 4.9 starts the native renderer before
+screen when the application exits. Version 4.19 starts the native renderer before
 loading monitoring libraries so the designed General screen appears at the
 beginning of a payload launch. It sends only changed frames using
 change-driven long polling, reclaims the physical display only when the native
 payload runner displaces it, routes Virtual Pager buttons directly to the app,
-admits only one button until the next rendered frame, abandons and reconnects a
-stuck long poll, restores the application immediately after page refresh, hides
+admits only one button until the next rendered frame, uses a low-churn five-second
+long poll with bounded client and server timeouts, restores the application
+immediately after page refresh, hides
 the stock login/loading panels while the application owns the screen, supports
 the same flow from the keyboard arrow/Enter/Escape keys,
 reads the six physical controls directly from the Pager input device instead of
@@ -152,11 +163,39 @@ gesture finish before accepting navigation, commits the first screen
 before starting Recon/evidence workers, uses low-CPU uncompressed PNGs for the
 Virtual Pager, starts from cached safe state before any live refresh, cleans up
 UI workers on normal exit or disconnect, prevents duplicate UI instances, and
-clips dynamic text to its assigned panels. The stock page is
-backed up before the bridge is
-first installed. Measured before/after results are recorded in
+clips dynamic text to its assigned panels. On Pager 24.10.1 it also isolates the
+renderer from the firmware launcher's process-group handoff, pauses the stock
+framebuffer/input service while the custom application owns the hardware,
+restores it on every exit path, maps the physical green button to confirm and
+red to back/exit, and retains one distinct follow-up button until the current
+frame is acknowledged so quick two-step navigation is not dropped. It also
+gives every run a unique screen revision, forgets prior revisions after exit,
+and bounds a dead screen request at 6.5 seconds, so repeated launches switch
+back to the live DEFCON canvas without a manual browser reload. For day-long
+sessions, it refreshes the physical input descriptor every ten minutes, limits
+framebuffer ownership probes to the eight-second launch handoff, times out a
+stalled Recon read, exposes degraded or stale monitoring state, and uses unique
+atomic state files for concurrent background workers. Virtual screen responses
+share immutable frame buffers rather than copying 320 KB per request. Version
+4.19 also reuses the canvas and RGB565 conversion buffers, draws its ten fixed
+status icons without loading a TrueType parser, classifies each Recon snapshot
+in one pass, calculates all UI counters in one pass, imports pre-existing PCAPs
+once per session with a linear index comparison, and installs the Virtual Pager
+bridge as a small external-script tag. The stock page is backed up before the
+bridge is first installed. Measured before/after results are recorded in
 `docs/ui-v4/performance.md`. The complete normal, empty, detail, and stress-state
 containment audit is in `docs/audits/2026-08-10-text-containment/README.md`.
+
+The custom screen server binds only to the Pager's `172.16.52.1` USB-management
+address. Screen and button requests require a random 128-bit token stored with
+mode `0600` under the DEFCON Defense loot directory and exposed only through the
+authenticated Virtual Pager page. The health check contains no screen data and
+remains available for local liveness testing.
+
+Version 4.18 and later reject Recon observations older than 45 seconds and require a
+post-launch observation before alerting. Cached AP rows therefore cannot keep
+an ended test threat active, replay its ringtone after restart, or start another
+automatic PCAP after the transmitter is gone.
 
 Automatic PCAP capture is deliberately bounded and conservative:
 
@@ -168,10 +207,15 @@ Automatic PCAP capture is deliberately bounded and conservative:
 - automatic capture stops before 256 MB of managed PCAP data or 64 MB of free
   device storage is crossed; and
 - no capture is automatically deleted. The evidence browser requires explicit
-  confirmation before removing a selected file.
+  confirmation before removing a selected file, and the main UI's **Clear
+  Session** option requires the deliberate **RIGHT to arm, then A within three
+  seconds** sequence before removing the current alert history and all managed
+  PCAP files. Repeated or stray A presses cannot activate it.
 
-`events.log`, `honeypot.csv`, and `findings.tsv` are append-only and grow over a
-multi-day event — clear them periodically if device storage is tight.
+`events.log`, `honeypot.csv`, and `findings.tsv` can grow over a multi-day
+event. **Clear Session** resets the DEFCON Defense alert history and managed
+PCAP evidence while preserving watched APs, the reviewed baseline, and trusted
+rules. The separate honeypot record remains outside that UI reset.
 
 ## This is not a substitute for opsec
 

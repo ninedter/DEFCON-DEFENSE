@@ -2,7 +2,7 @@
 # Title: DEFCON Defense
 # Description: Unified passive 2.4/5 GHz monitoring, alerting, evidence, and defensive-tool launcher.
 # Author: Henry Hu
-# Version: 4.9
+# Version: 4.20
 # Category: General
 
 PAYLOAD_ROOT="/root/payloads"
@@ -39,12 +39,128 @@ UI_BINARY="${DEFCON_DEFENSE_UI_BINARY:-$DIR/defcon-ui}"
 UI_STATE="$LOOT_DIR/ui_state.psv"
 UI_ACTION="$LOOT_DIR/ui_action.psv"
 UI_MUTE="$LOOT_DIR/ui_muted"
+UI_HTTP_TOKEN_FILE="$LOOT_DIR/ui_http_token"
+UI_HTTP_TOKEN=""
 UI_BRIDGE_SOURCE="$DIR/virtual-pager-bridge.js"
 UI_SESSION_LOCK="$LOOT_DIR/.ui_session.lock"
 CUSTOM_UI_PID=""
 CUSTOM_UI_READY=""
 CUSTOM_UI_LOCKED=0
-EARLY_UI_STARTED=0
+PAGER_SERVICE_STOPPED_BY_DEFCON=0
+
+pager_firmware_ui_running() {
+  # Pager 24.10.1 ships a pgrep whose `-x` option does not match the stock
+  # process even though plain pgrep does. pidof is both cheaper and exact for
+  # this fixed process name. Keep a /proc fallback for minimal firmware builds.
+  if command -v pidof >/dev/null 2>&1; then
+    pidof pineapple >/dev/null 2>&1
+    return
+  fi
+  local proc
+  for proc in /proc/[0-9]*; do
+    [ "$(cat "$proc/comm" 2>/dev/null)" = "pineapple" ] && return 0
+  done
+  return 1
+}
+
+# Firmware commands that reach the stock `pineapple` process through
+# /tmp/api.sock. While that process is frozen they would block forever and
+# then fire stale dialogs/alerts the moment the menu resumes, so session
+# workers get inert stand-ins until the firmware UI is running again.
+PAGER_API_COMMANDS="LOG ALERT ALERT_RINGTONE RINGTONE VIBRATE ERROR_DIALOG PROMPT LIST_PICKER CONFIRMATION_DIALOG WAIT_FOR_INPUT WAIT_FOR_BUTTON_PRESS START_SPINNER STOP_SPINNER PINEAPPLE_SET_BANDS PINEAPPLE_EXAMINE_BSSID PINEAPPLE_EXAMINE_CHANNEL PINEAPPLE_EXAMINE_RESET"
+PAGER_FROZEN_PIDS=""
+PAGER_PORTAL_REDIRECTED=0
+PAGER_PORTAL_TABLE="defcon_defense_portal"
+CUSTOM_UI_PORTAL_PORT=1473
+
+pager_api_commands_disable() {
+  local cmd
+  for cmd in $PAGER_API_COMMANDS; do
+    eval "$cmd() { return 1; }"
+  done
+}
+
+pager_api_commands_enable() {
+  local cmd
+  for cmd in $PAGER_API_COMMANDS; do
+    unset -f "$cmd" 2>/dev/null || true
+  done
+}
+
+pager_portal_redirect_start() {
+  # The frozen firmware keeps its :1471 listener, so new Virtual Pager
+  # connections would hang. Steer only new USB-management connections to the
+  # renderer's static portal; established flows and every other port are
+  # untouched, and deleting the private table restores the stock path.
+  command -v nft >/dev/null 2>&1 || return 0
+  nft delete table inet "$PAGER_PORTAL_TABLE" >/dev/null 2>&1 || true
+  nft -f - >/dev/null 2>&1 <<NFT || return 0
+table inet $PAGER_PORTAL_TABLE {
+  chain prerouting {
+    type nat hook prerouting priority dstnat - 1; policy accept;
+    ip daddr 172.16.52.1 tcp dport 1471 redirect to :$CUSTOM_UI_PORTAL_PORT
+  }
+}
+NFT
+  PAGER_PORTAL_REDIRECTED=1
+}
+
+pager_portal_redirect_stop() {
+  [ "$PAGER_PORTAL_REDIRECTED" = "1" ] || return 0
+  nft delete table inet "$PAGER_PORTAL_TABLE" >/dev/null 2>&1 || true
+  PAGER_PORTAL_REDIRECTED=0
+}
+
+stop_pager_service_for_custom_ui() {
+  # The stock pineapple process owns /dev/fb0 and event0. Freeze it instead
+  # of deleting its procd service: SIGCONT hands the menu back instantly on
+  # exit, whereas a service restart cold-boots the firmware UI ("Initializing
+  # system", ~20 s) and replaces the process that launched this payload.
+  local pids
+  pids="$(pidof pineapple 2>/dev/null)"
+  [ -n "$pids" ] || return 0
+  pager_api_commands_disable
+  # shellcheck disable=SC2086
+  kill -STOP $pids 2>/dev/null || { pager_api_commands_enable; return 1; }
+  PAGER_FROZEN_PIDS="$pids"
+  PAGER_SERVICE_STOPPED_BY_DEFCON=1
+  pager_portal_redirect_start
+}
+
+restore_pager_service() {
+  pager_portal_redirect_stop
+  if [ -n "$PAGER_FROZEN_PIDS" ]; then
+    # shellcheck disable=SC2086
+    kill -CONT $PAGER_FROZEN_PIDS 2>/dev/null || true
+    PAGER_FROZEN_PIDS=""
+  fi
+  pager_api_commands_enable
+  PAGER_SERVICE_STOPPED_BY_DEFCON=0
+  # Repeated cleanup calls are harmless. Only if the firmware UI vanished
+  # during the session (crash, external stop) does it need a full start.
+  [ -x /etc/init.d/pineapplepager ] || return 0
+  pager_firmware_ui_running || /etc/init.d/pineapplepager start >/dev/null 2>&1 || true
+}
+
+ensure_ui_http_token() {
+  local token="" tmp="$UI_HTTP_TOKEN_FILE.tmp.${BASHPID:-$$}.${RANDOM:-0}"
+  if [ -s "$UI_HTTP_TOKEN_FILE" ]; then
+    token="$(cat "$UI_HTTP_TOKEN_FILE" 2>/dev/null)"
+  fi
+  if ! printf '%s' "$token" | grep -Eq '^[0-9a-f]{32}$'; then
+    if command -v hexdump >/dev/null 2>&1; then
+      # Pager 24.10.1 includes hexdump but omits the `od` applet.
+      token="$(hexdump -n 16 -e '16/1 "%02x"' /dev/urandom 2>/dev/null)"
+    elif command -v od >/dev/null 2>&1; then
+      token="$(od -An -N16 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n')"
+    fi
+    printf '%s' "$token" | grep -Eq '^[0-9a-f]{32}$' || return 1
+    (umask 077; printf '%s\n' "$token" > "$tmp") || return 1
+    mv -f "$tmp" "$UI_HTTP_TOKEN_FILE" || return 1
+  fi
+  chmod 600 "$UI_HTTP_TOKEN_FILE" 2>/dev/null || true
+  UI_HTTP_TOKEN="$token"
+}
 
 early_custom_ui_lock_acquire() {
   local owner="" ui_owner=""
@@ -85,6 +201,42 @@ early_custom_ui_cleanup() {
     rmdir "$UI_SESSION_LOCK" 2>/dev/null || true
     CUSTOM_UI_LOCKED=0
   fi
+  restore_pager_service
+}
+
+launch_custom_ui_process() {
+  # Pager 24.10.1 can hang up background children in the payload launcher's
+  # process group while it transitions between firmware screens. Keep the
+  # renderer in its own session when setsid is available, while retaining the
+  # exact child PID so the payload's normal B/HUP/TERM cleanup remains scoped.
+  if command -v setsid >/dev/null 2>&1; then
+    setsid "$UI_BINARY" \
+      --framebuffer /dev/fb0 \
+      --input-device /dev/input/event0 \
+      --ready-file "$CUSTOM_UI_READY" \
+      --data-dir "$LOOT_DIR" \
+      --pcap-dir "$PCAP_DIR" \
+      --action-file "$UI_ACTION" \
+      --mute-file "$UI_MUTE" \
+      --portal-listen "172.16.52.1:$CUSTOM_UI_PORTAL_PORT" \
+      --portal-root /pineapple/ui \
+      --virtual-listen 172.16.52.1:1472 \
+      --virtual-token-file "$UI_HTTP_TOKEN_FILE" &
+  else
+    "$UI_BINARY" \
+      --framebuffer /dev/fb0 \
+      --input-device /dev/input/event0 \
+      --ready-file "$CUSTOM_UI_READY" \
+      --data-dir "$LOOT_DIR" \
+      --pcap-dir "$PCAP_DIR" \
+      --action-file "$UI_ACTION" \
+      --mute-file "$UI_MUTE" \
+      --portal-listen "172.16.52.1:$CUSTOM_UI_PORTAL_PORT" \
+      --portal-root /pineapple/ui \
+      --virtual-listen 172.16.52.1:1472 \
+      --virtual-token-file "$UI_HTTP_TOKEN_FILE" &
+  fi
+  CUSTOM_UI_PID=$!
 }
 
 start_custom_ui_early() {
@@ -92,28 +244,25 @@ start_custom_ui_early() {
   [ "${DEFCON_DEFENSE_NATIVE_UI:-1}" = "1" ] || return 0
   [ -x "$UI_BINARY" ] && [ -w /dev/fb0 ] || return 0
   mkdir -p "$LOOT_DIR" "$PCAP_DIR"
+  ensure_ui_http_token || return 0
   early_custom_ui_lock_acquire || return 0
   CUSTOM_UI_READY="$LOOT_DIR/.ui_ready.$$"
   rm -f "$CUSTOM_UI_READY"
-  "$UI_BINARY" \
-    --framebuffer /dev/fb0 \
-    --input-device /dev/input/event0 \
-    --ready-file "$CUSTOM_UI_READY" \
-    --data-dir "$LOOT_DIR" \
-    --pcap-dir "$PCAP_DIR" \
-    --action-file "$UI_ACTION" \
-    --mute-file "$UI_MUTE" &
-  CUSTOM_UI_PID=$!
-  printf '%s\n' "$CUSTOM_UI_PID" > "$UI_SESSION_LOCK/ui_pid"
-  if kill -0 "$CUSTOM_UI_PID" 2>/dev/null; then
-    EARLY_UI_STARTED=1
-    trap early_custom_ui_cleanup EXIT
-    trap 'early_custom_ui_cleanup; exit 130' INT
-    trap 'early_custom_ui_cleanup; exit 143' TERM
-    trap 'early_custom_ui_cleanup; exit 129' HUP
-  else
+  # The stock pineapple service also owns /dev/fb0 and event0. Pausing it is
+  # the supported handoff used by native Pager applications; otherwise both
+  # renderers race and produce torn frames while each physical press is read
+  # twice. The EXIT/HUP/TERM paths below always restore the firmware service.
+  trap early_custom_ui_cleanup EXIT
+  trap 'early_custom_ui_cleanup; exit 130' INT
+  trap 'early_custom_ui_cleanup; exit 143' TERM
+  trap 'early_custom_ui_cleanup; exit 129' HUP
+  if ! stop_pager_service_for_custom_ui; then
     early_custom_ui_cleanup
+    return 0
   fi
+  launch_custom_ui_process
+  printf '%s\n' "$CUSTOM_UI_PID" > "$UI_SESSION_LOCK/ui_pid"
+  kill -0 "$CUSTOM_UI_PID" 2>/dev/null || early_custom_ui_cleanup
 }
 
 # Start the native renderer before loading the monitoring libraries. This makes
@@ -123,6 +272,9 @@ start_custom_ui_early
 
 # Fatigue-resistant defaults for a crowded venue.
 MONITOR_INTERVAL=15
+RECON_COMMAND_TIMEOUT="${DEFCON_DEFENSE_RECON_TIMEOUT:-8}"
+RECON_OBSERVATION_MAX_AGE="${DEFCON_DEFENSE_OBSERVATION_MAX_AGE:-45}"
+MONITOR_SESSION_EPOCH="${DEFCON_DEFENSE_SESSION_EPOCH:-$(date +%s)}"
 NEW_BSSID_THRESHOLD=2
 OBSERVATION_WINDOW=60
 ALERT_COOLDOWN=300
@@ -142,12 +294,12 @@ fi
 . "$RF_LIB"
 # shellcheck source=/dev/null
 . "$PCAP_LIB"
-PCAP_EVIDENCE_DIR="$LOOT_DIR"
-PCAP_EVIDENCE_PCAP_DIR="$PCAP_DIR"
+export PCAP_EVIDENCE_DIR="$LOOT_DIR"
+export PCAP_EVIDENCE_PCAP_DIR="$PCAP_DIR"
 PCAP_EVIDENCE_INDEX="$LOOT_DIR/pcap_index.tsv"
-PCAP_EVIDENCE_STATE="$LOOT_DIR/pcap_capture.psv"
-PCAP_EVIDENCE_DEDUPE="$LOOT_DIR/pcap_dedupe.psv"
-PCAP_EVIDENCE_LOCK="$LOOT_DIR/.pcap_capture.lock"
+export PCAP_EVIDENCE_STATE="$LOOT_DIR/pcap_capture.psv"
+export PCAP_EVIDENCE_DEDUPE="$LOOT_DIR/pcap_dedupe.psv"
+export PCAP_EVIDENCE_LOCK="$LOOT_DIR/.pcap_capture.lock"
 pcap_evidence_configure
 mkdir -p "$LOOT_DIR" "$PCAP_DIR"
 
@@ -266,6 +418,7 @@ cleanup_defcon_defense() {
   cleanup_focused_monitor
   cleanup_background_monitor
   custom_ui_lock_release
+  restore_pager_service
 }
 trap cleanup_defcon_defense EXIT
 trap 'cleanup_defcon_defense; exit 130' INT
@@ -354,7 +507,7 @@ capture_snapshot() {
     if [ "$quiet" = "1" ]; then LOG yellow "PineAP Recon API is unavailable; retrying."; else ERROR_DIALOG "PineAP Recon API is unavailable."; fi
     return 1
   fi
-  if ! _pineap RECON APS format=json > "$tmp_json" 2>/dev/null; then
+  if ! capture_recon_json "$tmp_json"; then
     rm -f "$tmp_json" "$tmp_snapshot"
     if [ "$quiet" = "1" ]; then LOG yellow "Could not read Recon AP data; retrying."; else ERROR_DIALOG "Could not read Recon AP data. Start Recon and try again."; fi
     return 1
@@ -367,6 +520,43 @@ capture_snapshot() {
   mv -f "$tmp_json" "$RECON_JSON"
   mv -f "$tmp_snapshot" "$SNAPSHOT"
   return 0
+}
+
+capture_recon_json() { # output_json
+  local output="$1" worker_pid watchdog_pid child_pid rc=0 timed_out=0
+  local timeout_marker="$output.timeout"
+  rm -f "$timeout_marker"
+  # PineAP is normally fast, but a firmware IPC stall used to block the
+  # background worker forever and leave the UI showing old data as ACTIVE.
+  # Run it in a dedicated background subshell with a bounded watchdog. The
+  # exact child PID is waited and reaped on every path, preventing zombies.
+  (_pineap RECON APS format=json > "$output" 2>/dev/null) &
+  worker_pid=$!
+  (
+    sleep "$RECON_COMMAND_TIMEOUT"
+    if kill -0 "$worker_pid" 2>/dev/null; then
+      : > "$timeout_marker"
+      for child_pid in $(pgrep -P "$worker_pid" 2>/dev/null); do
+        kill "$child_pid" 2>/dev/null || true
+      done
+      kill "$worker_pid" 2>/dev/null || true
+      sleep 1
+      for child_pid in $(pgrep -P "$worker_pid" 2>/dev/null); do
+        kill -9 "$child_pid" 2>/dev/null || true
+      done
+      kill -0 "$worker_pid" 2>/dev/null && kill -9 "$worker_pid" 2>/dev/null || true
+    fi
+  ) &
+  watchdog_pid=$!
+  wait "$worker_pid" 2>/dev/null || rc=$?
+  kill "$watchdog_pid" 2>/dev/null || true
+  wait "$watchdog_pid" 2>/dev/null || true
+  if [ -f "$timeout_marker" ]; then
+    timed_out=1
+    rm -f "$timeout_marker"
+  fi
+  [ "$timed_out" = "0" ] || return 124
+  return "$rc"
 }
 
 inventory_summary() {
@@ -482,17 +672,29 @@ $capture_note"
   LOG red "$capture_note"
 }
 
+refresh_custom_ui_threats() { # now_epoch
+  local now="${1:-$(date +%s)}" threat_snapshot="$LOOT_DIR/latest_threats.tsv"
+  local tmp="$LOOT_DIR/.latest_threats.empty.${BASHPID:-$$}.${RANDOM:-0}"
+  if [ -s "$SNAPSHOT" ]; then
+    rf_build_threat_snapshot "$WATCHED_APS" "$TRUSTED_APS" "$BASELINE" "$SNAPSHOT" \
+      "$DEAUTH_EVENTS" "$now" "$threat_snapshot" "$RECON_OBSERVATION_MAX_AGE" \
+      "$MONITOR_SESSION_EPOCH"
+  else
+    : > "$tmp" && mv -f "$tmp" "$threat_snapshot"
+  fi
+}
+
 analyze_snapshot() {
-  local bssid ssid channel freq signal _seen_time _packets band event threshold should_alert
-  local quiet="${1:-0}" alerts=0 observations=0 new_bssids_seen=""
-  while IFS=$'\t' read -r bssid ssid channel freq signal _seen_time _packets band; do
-    case "$band" in 2.4GHz|5GHz) ;; *) continue ;; esac
-    observations=$((observations + 1))
-    event="$(rf_watch_classify "$WATCHED_APS" "$bssid" "$ssid" "$channel")"
-    if [ "$event" = "NONE" ]; then
-      event="$(rf_classify_observation "$TRUSTED_APS" "$BASELINE" "$bssid" "$ssid" "$channel")"
-    fi
-    [ "$event" != "NONE" ] || continue
+  local bssid ssid channel band signal _packets event _deauth _color freq threshold should_alert
+  local quiet="${1:-0}" now="${2:-$(date +%s)}" alerts=0 candidates=0 new_bssids_seen=""
+  local threat_snapshot="$LOOT_DIR/latest_threats.tsv"
+  refresh_custom_ui_threats "$now" || return 1
+  while IFS=$'\t' read -r bssid ssid channel band signal _packets event _deauth _color freq; do
+    [ -n "$bssid" ] || continue
+    candidates=$((candidates + 1))
+    # Deauthentication alerts are owned by the dedicated Pager alert handler;
+    # the unified snapshot displays them but must not duplicate that alert.
+    [ "$event" != "DEAUTH_ACTIVITY" ] || continue
 
     threshold=1
     if [ "$event" = "NEW_BSSID" ] || [ "$event" = "WATCHED_SSID_NEW_BSSID" ]; then
@@ -503,14 +705,14 @@ analyze_snapshot() {
       new_bssids_seen="${new_bssids_seen}|${bssid}|"
       threshold="$NEW_BSSID_THRESHOLD"
     fi
-    should_alert="$(rf_state_should_alert "$ALERT_STATE" "$event" "$bssid" "$(date +%s)" \
+    should_alert="$(rf_state_should_alert "$ALERT_STATE" "$event" "$bssid" "$now" \
       "$threshold" "$OBSERVATION_WINDOW" "$ALERT_COOLDOWN")"
     if [ "$should_alert" = "1" ]; then
-      alert_rf_finding "$event" "$bssid" "$ssid" "$channel" "$freq" "$signal" "$band"
+      alert_rf_finding "$event" "$bssid" "$ssid" "$channel" "${freq:-?}" "$signal" "$band"
       alerts=$((alerts + 1))
     fi
-  done < "$SNAPSHOT"
-  [ "$quiet" = "1" ] || LOG "Observed $observations records; issued $alerts new alerts."
+  done < "$threat_snapshot"
+  [ "$quiet" = "1" ] || LOG "Evaluated $candidates threat candidates; issued $alerts new alerts."
 }
 
 background_monitor_loop() {
@@ -539,23 +741,32 @@ background_monitor_status() {
   fi
 }
 
-write_custom_ui_state() {
-  local tmp="$UI_STATE.tmp.$$" threat_snapshot="$LOOT_DIR/latest_threats.tsv"
-  local count24=0 count5=0 ap_count=0 threat_count=0 watched_count=0
-  if [ -s "$SNAPSHOT" ]; then
-    count24="$(rf_count_band "$SNAPSHOT" "2.4GHz")"
-    count5="$(rf_count_band "$SNAPSHOT" "5GHz")"
-    ap_count=$((count24 + count5))
-    rf_build_threat_snapshot "$WATCHED_APS" "$TRUSTED_APS" "$BASELINE" "$SNAPSHOT" \
-      "$DEAUTH_EVENTS" "$(date +%s)" "$threat_snapshot" >/dev/null 2>&1 || true
+write_custom_ui_state() { # monitoring updated_epoch recon_failures
+  local state_token="${BASHPID:-$$}.${RANDOM:-0}"
+  local tmp="$UI_STATE.tmp.$state_token" threat_snapshot="$LOOT_DIR/latest_threats.tsv"
+  local count24=0 count5=0 ap_count=0 threat_count=0 watched_count=0 metrics key value
+  local monitoring="${1:-}" updated_epoch="${2:-}" recon_failures="${3:-}"
+  if { [ -z "$monitoring" ] || [ -z "$updated_epoch" ] || [ -z "$recon_failures" ]; } && \
+     [ -s "$UI_STATE" ]; then
+    while IFS='=' read -r key value; do
+      case "$key" in
+        monitoring) [ -n "$monitoring" ] || monitoring="$value" ;;
+        updated_epoch) [ -n "$updated_epoch" ] || updated_epoch="$value" ;;
+        recon_failures) [ -n "$recon_failures" ] || recon_failures="$value" ;;
+      esac
+    done < "$UI_STATE"
   fi
-  [ -s "$threat_snapshot" ] && threat_count="$(wc -l < "$threat_snapshot" | tr -d ' ')"
-  watched_count="$(rf_watch_count "$WATCHED_APS")"
-  pcap_evidence_import_existing >/dev/null 2>&1 || true
+  [ -n "$monitoring" ] || monitoring="STARTING"
+  [ -n "$updated_epoch" ] || updated_epoch=0
+  [ -n "$recon_failures" ] || recon_failures=0
+  metrics="$(rf_ui_metrics "$SNAPSHOT" "$threat_snapshot" "$WATCHED_APS" 2>/dev/null)" || metrics="0|0|0|0"
+  IFS='|' read -r count24 count5 threat_count watched_count <<< "$metrics"
+  ap_count=$((count24 + count5))
   {
     printf 'version=4\n'
-    printf 'monitoring=ACTIVE\n'
-    printf 'updated_epoch=%s\n' "$(date +%s)"
+    printf 'monitoring=%s\n' "$monitoring"
+    printf 'updated_epoch=%s\n' "$updated_epoch"
+    printf 'recon_failures=%s\n' "$recon_failures"
     printf 'ap_count=%s\n' "$ap_count"
     printf 'count_24=%s\n' "$count24"
     printf 'count_5=%s\n' "$count5"
@@ -565,12 +776,24 @@ write_custom_ui_state() {
 }
 
 custom_ui_backend_loop() {
+  local recon_failures=0 last_success=0 monitoring="STARTING" cycle_now
+  if [ -s "$UI_STATE" ]; then
+    last_success="$(awk -F= '$1=="updated_epoch" {print $2; exit}' "$UI_STATE" 2>/dev/null)"
+    printf '%s' "$last_success" | grep -Eq '^[0-9]+$' || last_success=0
+  fi
   set_recon_bands || true
   while true; do
+    cycle_now="$(date +%s)"
     if capture_snapshot 1; then
-      analyze_snapshot 1
+      analyze_snapshot 1 "$cycle_now"
+      recon_failures=0
+      last_success="$cycle_now"
+      monitoring="ACTIVE"
+    else
+      recon_failures=$((recon_failures + 1))
+      monitoring="DEGRADED"
     fi
-    write_custom_ui_state
+    write_custom_ui_state "$monitoring" "$last_success" "$recon_failures"
     sleep "$MONITOR_INTERVAL"
   done
 }
@@ -592,25 +815,49 @@ verify_custom_ui_evidence() { # evidence id
     mv -f "$tmp" "$PCAP_EVIDENCE_INDEX"
 }
 
-custom_ui_action_loop() {
+clear_custom_ui_session() {
+  pcap_evidence_clear_all || return 1
+  rm -f -- "$FINDINGS" "$ALERT_STATE" "$LOOT_DIR/latest_threats.tsv" \
+    "$SNAPSHOT" "$RECON_JSON" "$DEAUTH_EVENTS"
+}
+
+process_custom_ui_action() {
   local action event ssid bssid band channel signal id
-  while true; do
-    if [ -s "$UI_ACTION" ] && mv -f "$UI_ACTION" "$UI_ACTION.processing" 2>/dev/null; then
-      IFS='|' read -r action event ssid bssid band channel signal < "$UI_ACTION.processing" || true
-      rm -f "$UI_ACTION.processing"
-      case "$action" in
-        CAPTURE)
-          pcap_evidence_bounded_start "${event:-MANUAL_INVESTIGATE}" "INFO" \
-            "$ssid" "$bssid" "$band" "$channel" "$signal" \
-            "manual-investigate" 0 "${PCAP_EVIDENCE_DURATION:-30}" >/dev/null 2>&1 || true
+  [ -s "$UI_ACTION" ] || return 1
+  mv -f "$UI_ACTION" "$UI_ACTION.processing" 2>/dev/null || return 1
+  IFS='|' read -r action event ssid bssid band channel signal < "$UI_ACTION.processing" || true
+  rm -f "$UI_ACTION.processing"
+  case "$action" in
+    CAPTURE)
+      pcap_evidence_bounded_start "${event:-MANUAL_INVESTIGATE}" "INFO" \
+        "$ssid" "$bssid" "$band" "$channel" "$signal" \
+        "manual-investigate" 0 "${PCAP_EVIDENCE_DURATION:-30}" >/dev/null 2>&1 || true
+      ;;
+    VERIFY)
+      id="$event"
+      verify_custom_ui_evidence "$id" >/dev/null 2>&1 || true
+      ;;
+    WATCH)
+      case "$event" in
+        ADD)
+          rf_watch_upsert "$WATCHED_APS" "$bssid" "$ssid" "$channel" "$band" || true
           ;;
-        VERIFY)
-          id="$event"
-          verify_custom_ui_evidence "$id" >/dev/null 2>&1 || true
+        REMOVE)
+          rf_watch_remove "$WATCHED_APS" "$bssid" || true
           ;;
       esac
-      write_custom_ui_state
-    fi
+      refresh_custom_ui_threats >/dev/null 2>&1 || true
+      ;;
+    CLEAR_SESSION)
+      clear_custom_ui_session || true
+      ;;
+  esac
+  write_custom_ui_state
+}
+
+custom_ui_action_loop() {
+  while true; do
+    process_custom_ui_action || true
     sleep 1
   done
 }
@@ -619,29 +866,28 @@ install_virtual_pager_bridge() {
   local ui_root="/pineapple/ui"
   local index="$ui_root/index.html"
   local target="$ui_root/defcon-ui-bridge.js"
-  local inline="$ui_root/defcon-ui-bridge.inline"
   local tmp="$ui_root/index.html.defcon-defense.tmp"
+  local bridge_version="4.4.0"
+  local marker="data-defcon-defense-bridge=\"$bridge_version\""
+  local token_marker
   [ -f "$UI_BRIDGE_SOURCE" ] && [ -f "$index" ] || return 1
-  cp "$UI_BRIDGE_SOURCE" "$target" || return 1
-  if grep -Fq '__defconDefenseBridgeVersion = "4.3.1"' "$index"; then
+  [ -n "$UI_HTTP_TOKEN" ] || ensure_ui_http_token || return 1
+  token_marker="data-defcon-defense-token=\"$UI_HTTP_TOKEN\""
+  if ! cmp -s "$UI_BRIDGE_SOURCE" "$target" 2>/dev/null; then
+    cp "$UI_BRIDGE_SOURCE" "$target" || return 1
+  fi
+  if grep -Fq "$marker" "$index" && grep -Fq "$token_marker" "$index"; then
     return 0
   fi
   [ -f "$ui_root/index.html.defcon-defense-backup" ] || \
     cp "$index" "$ui_root/index.html.defcon-defense-backup" || return 1
-  # Rebuild from the pristine page with BusyBox sed. The prior awk string
-  # accumulator emitted the 140 KB portal extremely slowly on this hardware.
-  # A small prebuilt inline block keeps the rewrite fast and correctly places
-  # the bridge before the closing body tag.
-  {
-    printf '<script>\n'
-    cat "$UI_BRIDGE_SOURCE"
-    printf '\n</script>\n</body>\n'
-  } > "$inline" || return 1
-  sed "/<\\/body>/{
-r $inline
-d
-}" "$ui_root/index.html.defcon-defense-backup" > "$tmp" || return 1
+  # Inject only a tiny external tag. This avoids copying and parsing the 10 KB
+  # bridge into the 140 KB portal when a bridge revision changes.
+  sed "s#</body>#<script $marker $token_marker src=\"/defcon-ui-bridge.js?v=$bridge_version\"></script></body>#" \
+    "$ui_root/index.html.defcon-defense-backup" > "$tmp" || return 1
+  grep -Fq "$marker" "$tmp" || return 1
   mv -f "$tmp" "$index"
+  rm -f "$ui_root/defcon-ui-bridge.inline"
 }
 
 custom_ui_session() {
@@ -651,17 +897,20 @@ custom_ui_session() {
     if ! custom_ui_lock_acquire; then
       return 0
     fi
+    if ! ensure_ui_http_token; then
+      custom_ui_lock_release
+      return 1
+    fi
+    # The fast early handoff can be skipped if token setup or firmware service
+    # control is temporarily unavailable. Never let the fallback renderer race
+    # the stock framebuffer/input owner: reacquire ownership or fail closed.
+    if ! stop_pager_service_for_custom_ui; then
+      custom_ui_lock_release
+      return 1
+    fi
     CUSTOM_UI_READY="$LOOT_DIR/.ui_ready.$$"
     rm -f "$CUSTOM_UI_READY"
-    "$UI_BINARY" \
-      --framebuffer /dev/fb0 \
-      --input-device /dev/input/event0 \
-      --ready-file "$CUSTOM_UI_READY" \
-      --data-dir "$LOOT_DIR" \
-      --pcap-dir "$PCAP_DIR" \
-      --action-file "$UI_ACTION" \
-      --mute-file "$UI_MUTE" &
-    CUSTOM_UI_PID=$!
+    launch_custom_ui_process
     printf '%s\n' "$CUSTOM_UI_PID" > "$UI_SESSION_LOCK/ui_pid"
   fi
   # The early renderer is already visible. Bridge installation, Recon,
@@ -673,6 +922,9 @@ custom_ui_session() {
     ready_checks=$((ready_checks + 1))
   done
   if kill -0 "$CUSTOM_UI_PID" 2>/dev/null; then
+    # Legacy/external captures only need one import per UI session. Captures
+    # created by this payload append their own index rows when they finish.
+    pcap_evidence_import_existing >/dev/null 2>&1 || true
     custom_ui_backend_loop >/dev/null 2>&1 &
     CUSTOM_UI_BACKEND_PID=$!
     custom_ui_action_loop >/dev/null 2>&1 &
@@ -680,6 +932,9 @@ custom_ui_session() {
   fi
   wait "$CUSTOM_UI_PID"
   ui_rc=$?
+  # Hand the screen and buttons back the moment the renderer exits; worker
+  # shutdown below no longer leaves a stale frame up while B looks ignored.
+  restore_pager_service
   CUSTOM_UI_PID=""
   rm -f "$CUSTOM_UI_READY"
   CUSTOM_UI_READY=""
@@ -967,7 +1222,8 @@ load_active_threats() {
   THREAT_BSSIDS=(); THREAT_SSIDS=(); THREAT_CHANNELS=(); THREAT_BANDS=()
   THREAT_SIGNALS=(); THREAT_PACKETS=(); THREAT_REASONS=(); THREAT_COLORS=()
   rf_build_threat_snapshot "$WATCHED_APS" "$TRUSTED_APS" "$BASELINE" "$SNAPSHOT" \
-    "$DEAUTH_EVENTS" "$(date +%s)" "$threat_snapshot" || return 1
+    "$DEAUTH_EVENTS" "$(date +%s)" "$threat_snapshot" "$RECON_OBSERVATION_MAX_AGE" \
+    "$MONITOR_SESSION_EPOCH" || return 1
   while IFS=$'\t' read -r bssid ssid channel band signal packets event deauth_count color; do
     [ -n "$bssid" ] || continue
     reason="$(threat_label_for "$event" "$deauth_count")"
@@ -1227,7 +1483,7 @@ verify_pcap_hash() { # index
   awk -F '\t' -v OFS='\t' -v wanted="$id" -v digest="$sha" \
     '$2==wanted {$12=digest} {print}' "$PCAP_EVIDENCE_INDEX" > "$tmp" && \
     mv -f "$tmp" "$PCAP_EVIDENCE_INDEX"
-  PCAP_HASHES[$index]="$sha"
+  PCAP_HASHES[index]="$sha"
   PROMPT "EVIDENCE VERIFIED\n\nSHA-256:\n$sha"
 }
 
