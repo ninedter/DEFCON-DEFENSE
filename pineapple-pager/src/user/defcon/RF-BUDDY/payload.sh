@@ -122,8 +122,14 @@ stock_ui_resume() {
 rf_watchdog_body() {
   trap '' HUP INT TERM
   local ppid="$1" uipid="$2" frozen="$3" initd="$4" buzdir="$5" lockdir="$6"
+  local rundir="$7"
   local i=0 owner=""
+  # First statement: publish our own pid ($$ is this bash). setsid may fork,
+  # so the launcher's $! can name a short-lived parent instead of us.
+  echo $$ > "$rundir/watchdog.pid"
   while kill -0 "$ppid" 2>/dev/null; do sleep 1; done
+  # A normal exit marks itself clean before killing us; never act on it.
+  [ -e "$rundir/clean-exit" ] && return 0
   if [ -n "$uipid" ] && kill -0 "$uipid" 2>/dev/null; then
     kill "$uipid" 2>/dev/null || true
     while kill -0 "$uipid" 2>/dev/null && [ "$i" -lt 30 ]; do
@@ -154,10 +160,10 @@ rf_watchdog_start() {
   script="$(declare -f rf_watchdog_body); rf_watchdog_body \"\$@\""
   if command -v setsid >/dev/null 2>&1; then
     setsid bash -c "$script" rf-buddy-watchdog "$$" "$UI_PID" "$FROZEN_PIDS" \
-      "$initd" "$BUZZER_DIR" "$LOCK_DIR" </dev/null >/dev/null 2>&1 &
+      "$initd" "$BUZZER_DIR" "$LOCK_DIR" "$RUN_DIR" </dev/null >/dev/null 2>&1 &
   else
     bash -c "$script" rf-buddy-watchdog "$$" "$UI_PID" "$FROZEN_PIDS" \
-      "$initd" "$BUZZER_DIR" "$LOCK_DIR" </dev/null >/dev/null 2>&1 &
+      "$initd" "$BUZZER_DIR" "$LOCK_DIR" "$RUN_DIR" </dev/null >/dev/null 2>&1 &
   fi
   WATCHDOG_PID=$!
   disown "$WATCHDOG_PID" 2>/dev/null || true
@@ -188,14 +194,17 @@ rf_buddy_cleanup() {
   # Hand the stock UI back first; nothing below needs the UI to stay frozen.
   stock_ui_resume
   # The UI is back; the watchdog must not fire a second time.
-  if [ -n "$WATCHDOG_PID" ]; then
-    kill -KILL "$WATCHDOG_PID" 2>/dev/null || true
-    WATCHDOG_PID=""
-  fi
+  # Mark the exit clean first so a watchdog that survives the kill stands down.
+  touch "$RUN_DIR/clean-exit" 2>/dev/null || true
+  local wpid=""
+  [ -f "$RUN_DIR/watchdog.pid" ] && wpid="$(cat "$RUN_DIR/watchdog.pid" 2>/dev/null)"
+  [ -n "$wpid" ] || wpid="$WATCHDOG_PID"
+  [ -n "$wpid" ] && kill -KILL "$wpid" 2>/dev/null
+  WATCHDOG_PID=""
   # Backstop: a SIGKILLed UI must never leave the buzzer sounding.
   [ -w "$BUZZER_DIR/brightness" ] && echo 0 > "$BUZZER_DIR/brightness" 2>/dev/null || true
   release_channel
-  rm -f "$READY_FILE"
+  rm -f "$READY_FILE" "$RUN_DIR/watchdog.pid" "$RUN_DIR/clean-exit"
   rf_lock_release
 }
 
@@ -210,6 +219,7 @@ rf_buddy_main() {
     ERROR_DIALOG "RF-BUDDY is already running."
     return 0
   fi
+  rm -f "$RUN_DIR/clean-exit" "$RUN_DIR/watchdog.pid"
   trap rf_buddy_cleanup EXIT
   trap 'rf_buddy_cleanup; exit 130' INT
   trap 'rf_buddy_cleanup; exit 143' TERM

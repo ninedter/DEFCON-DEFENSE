@@ -237,4 +237,36 @@ assert_rc "$x" "0" "SIGKILL test: watchdog terminated the orphaned UI"
 assert_eq "$(cat "$BUZ/brightness")" "0" "SIGKILL test: watchdog forces the buzzer off"
 unset FAKE_PINEAPPLE_PID FAKE_UI_LONG
 
+# --- forking setsid (BusyBox/util-linux fork when the caller leads its group) -
+# $! then names a short-lived setsid parent, not the watchdog. The watchdog
+# must be tracked by its own pid file and honour the clean-exit marker.
+FSBIN="$TMP/fakesetsid"; mkdir -p "$FSBIN"
+printf '#!/bin/bash\n"$@" &\nexit 0\n' > "$FSBIN/setsid"; chmod +x "$FSBIN/setsid"
+: > "$REC"; export FAKE_PINEAPPLE_PID=4242; unset FAKE_UI_LONG
+echo 255 > "$BUZ/brightness"
+PATH="$FSBIN:$PATH" bash "$PAYLOAD"; assert_rc "$?" "0" "forking setsid: payload exits cleanly"
+sleep 2
+assert_eq "$(grep -c $'^KILL\t-CONT ' "$REC")" "1" "forking setsid: watchdog did not fire a second SIGCONT"
+assert_eq "$(grep -c 'EXAMINE CANCEL' "$REC")" "1" "forking setsid: watchdog did not release the channel again"
+[ ! -e "$RF_BUDDY_RUN_DIR/watchdog.pid" ] && [ ! -e "$RF_BUDDY_RUN_DIR/clean-exit" ]; assert_rc "$?" "0" "forking setsid: pid file and marker removed after cleanup"
+
+: > "$REC"; rm -f "$TMP/ui.pid"
+export FAKE_UI_LONG=1
+echo 255 > "$BUZ/brightness"
+PATH="$FSBIN:$PATH" bash "$PAYLOAD" >/dev/null 2>&1 &
+ppid_=$!
+i=0
+while ! grep -q $'^KILL\t-STOP 4242$' "$REC" && [ "$i" -lt 100 ]; do sleep 0.1; i=$((i + 1)); done
+sleep 0.5
+uipid_="$(cat "$TMP/ui.pid" 2>/dev/null)"
+builtin kill -9 "$ppid_" 2>/dev/null
+wait "$ppid_" 2>/dev/null
+i=0
+while [ -d "$RF_BUDDY_LOCK_DIR" ] && [ "$i" -lt 80 ]; do sleep 0.1; i=$((i + 1)); done
+[ ! -d "$RF_BUDDY_LOCK_DIR" ]; assert_rc "$?" "0" "forking setsid SIGKILL: watchdog removes the lock"
+assert_eq "$(grep -c $'^KILL\t-CONT 4242$' "$REC")" "1" "forking setsid SIGKILL: watchdog resumes the stock UI"
+grep -q 'EXAMINE CANCEL' "$REC"; assert_rc "$?" "0" "forking setsid SIGKILL: watchdog releases the channel"
+[ -n "$uipid_" ] && builtin kill -9 "$uipid_" 2>/dev/null
+unset FAKE_PINEAPPLE_PID FAKE_UI_LONG
+
 exit "$FAIL"
