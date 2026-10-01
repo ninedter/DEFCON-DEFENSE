@@ -160,14 +160,31 @@ func (l *Logger) AddMark(m Mark) (int, error) {
 	l.markCount++
 	line := fmt.Sprintf("%d,%d,%s,%d,%d,%s\n", l.markCount, m.At.Unix(), m.Channel.Band.LogName(), m.Channel.Number, m.Score, m.Likely)
 	if m.BT {
-		label := strings.NewReplacer(",", "", "\n", " ", "\r", " ").Replace(m.BTLabel)
-		line = fmt.Sprintf("%d,%d,bt,%s,%d,%s\n", l.markCount, m.At.Unix(), m.BTAddr, m.RSSI, label)
+		line = fmt.Sprintf("%d,%d,bt,%s,%d,%s\n", l.markCount, m.At.Unix(), csvSafe(m.BTAddr), m.RSSI, csvSafe(m.BTLabel))
 	}
 	if _, err := io.WriteString(l.marks, line); err != nil {
 		l.markCount--
 		return 0, err
 	}
 	return l.markCount, nil
+}
+
+// csvSafe makes a stranger-controlled string safe as one CSV field: no
+// separators, quotes or control characters, and no leading formula trigger.
+func csvSafe(s string) string {
+	s = strings.Map(func(r rune) rune {
+		switch {
+		case r == '\n' || r == '\r':
+			return ' '
+		case r == ',' || r == '"' || r < 0x20 || r == 0x7f:
+			return -1
+		}
+		return r
+	}, s)
+	if s != "" && strings.ContainsRune("=+-@", rune(s[0])) {
+		s = "'" + s
+	}
+	return s
 }
 
 func (l *Logger) Close() error {
