@@ -33,7 +33,9 @@ func parseOptions(args []string) (options, error) {
 	fs.StringVar(&o.framebuffer, "framebuffer", "/dev/fb0", "Pager framebuffer")
 	fs.StringVar(&o.inputDevice, "input-device", "/dev/input/event0", "Pager evdev button device")
 	fs.StringVar(&o.readyFile, "ready-file", "", "written after the first frame is on screen")
-	fs.StringVar(&o.virtualListen, "virtual-listen", ":1474", "Virtual Pager bridge listen address")
+	// USB-management address only: the viewer has no login, so it must not be
+	// reachable from Wi-Fi networks the Pager joins.
+	fs.StringVar(&o.virtualListen, "virtual-listen", "172.16.52.1:1474", "viewer listen address (USB management network only)")
 	fs.StringVar(&o.previewDir, "preview-dir", "", "render preview PNGs and exit")
 	fs.StringVar(&o.iface, "iface", "wlan1mon", "monitor interface")
 	fs.StringVar(&o.btIface, "bt-iface", "hci0", "Bluetooth adapter")

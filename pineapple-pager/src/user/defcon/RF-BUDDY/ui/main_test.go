@@ -15,7 +15,7 @@ func TestParseOptionsDefaults(t *testing.T) {
 		t.Fatal(err)
 	}
 	if o.iface != "wlan1mon" || o.btIface != "hci0" || o.lootDir != "/root/loot/rf_buddy" || o.dwellMS != 250 ||
-		o.logMaxMB != 20 || o.minFreeMB != 64 || o.virtualListen != ":1474" || o.thresholds != DefaultThresholds() {
+		o.logMaxMB != 20 || o.minFreeMB != 64 || o.virtualListen != "172.16.52.1:1474" || o.thresholds != DefaultThresholds() {
 		t.Fatalf("defaults = %+v", o)
 	}
 }
