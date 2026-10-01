@@ -61,10 +61,15 @@ type BLEScanner struct {
 	RestartDelay time.Duration
 }
 
+// leScanArgs returns the hcitool arguments for a passive LE scan.
+func leScanArgs(iface string) []string {
+	return []string{"-i", iface, "lescan", "--passive", "--duplicates"}
+}
+
 func (s *BLEScanner) Run(ctx context.Context) {
 	for ctx.Err() == nil {
 		_ = exec.CommandContext(ctx, "hciconfig", s.Iface, "up").Run()
-		cmd := exec.CommandContext(ctx, "hcitool", "-i", s.Iface, "lescan", "--duplicates")
+		cmd := exec.CommandContext(ctx, "hcitool", leScanArgs(s.Iface)...)
 		if stdout, err := cmd.StdoutPipe(); err == nil && cmd.Start() == nil {
 			s.consume(stdout)
 			_ = cmd.Wait()

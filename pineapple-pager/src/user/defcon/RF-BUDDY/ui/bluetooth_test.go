@@ -42,3 +42,9 @@ func TestBLEScannerConsumesHcitoolOutput(t *testing.T) {
 		t.Fatalf("unique devices = %d, want 2", got)
 	}
 }
+
+func TestLEScanIsPassive(t *testing.T) {
+	if got := strings.Join(leScanArgs("hci0"), " "); got != "-i hci0 lescan --passive --duplicates" {
+		t.Fatalf("leScanArgs = %q", got)
+	}
+}

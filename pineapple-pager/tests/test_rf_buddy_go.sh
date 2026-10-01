@@ -23,11 +23,16 @@ assert_rc "$?" "0" "RF-BUDDY vets for the Pager MIPS target"
 assert_rc "$?" "0" "RF-BUDDY renders preview screens"
 assert_eq "$(find "$TMP/previews" -name '*.png' | wc -l | tr -d ' ')" "9" "all nine preview states rendered"
 
-if rg -n 'Sendto|Sendmsg|syscall\.Write|txpower|PINEAPPLE_DEAUTH|aireplay|mdk[34]|"set", "channel"' "$UI"/*.go >/dev/null 2>&1; then
-  passive_rc=1
-else
-  passive_rc=0
-fi
+command -v rg >/dev/null 2>&1; assert_rc "$?" "0" "rg is available for the passive-only check"
+rg -n -g '!*_test.go' -g '!vendor/**' -e 'Sendto|Sendmsg|syscall\.Write|txpower|PINEAPPLE_DEAUTH|aireplay|mdk[34]|"set", "channel"' "$UI" >/dev/null 2>&1
+rg_rc=$?
+case "$rg_rc" in
+  1) passive_rc=0 ;;
+  0) passive_rc=1 ;;
+  *) passive_rc=2 ;;
+esac
 assert_rc "$passive_rc" "0" "RF-BUDDY source never transmits or retunes outside PineAP"
+
+rg -q -- '"--passive"' "$UI/bluetooth.go"; assert_rc "$?" "0" "BLE scan is passive"
 
 exit "$FAIL"
