@@ -57,7 +57,7 @@ func TestTrackerDevices(t *testing.T) {
 	for _, d := range ds {
 		order = append(order, d.Addr)
 	}
-	// -70 smoothed AA? mean(-80,-60) = -70; A0/BB -60; CC -100
+	// AA smoothed mean(-80,-60) = -70; A0/BB -60; CC -100
 	if want := []string{"A0", "BB", "AA", "CC"}; !reflect.DeepEqual(order, want) {
 		t.Fatalf("order %v", order)
 	}
@@ -170,5 +170,23 @@ func TestTrackUnseenAndTrends(t *testing.T) {
 		if got := bleTrend(tc.h); got != tc.want {
 			t.Errorf("got %s want %s", got, tc.want)
 		}
+	}
+}
+
+func TestObserveSteadyStateDoesNotAllocateWithWindow(t *testing.T) {
+	tr := NewBLETracker(30 * time.Second)
+	at := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	a := Advert{Addr: "AA:BB:CC:DD:EE:01", RSSI: -60, Company: -1}
+	step := 10 * time.Millisecond // 100 adverts/s -> ~1000 live samples
+	for i := 0; i < 3000; i++ {
+		at = at.Add(step)
+		tr.Observe(a, at)
+	}
+	allocs := testing.AllocsPerRun(2000, func() {
+		at = at.Add(step)
+		tr.Observe(a, at)
+	})
+	if allocs > 0.5 {
+		t.Fatalf("Observe allocs/op = %v, want amortized ~0 (no per-advert window copy)", allocs)
 	}
 }

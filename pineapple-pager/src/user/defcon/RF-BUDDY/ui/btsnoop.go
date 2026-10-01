@@ -22,17 +22,17 @@ type Advert struct {
 }
 
 const (
-	btsnoopHdrLen   = 16
-	btsnoopRecLen   = 24
-	btsnoopMaxPkt   = 1 << 16
-	dlHCIUnenc      = 1001
-	dlHCIUART       = 1002
-	hciEvtLEMeta    = 0x3E
-	hciSubLEAdv     = 0x02
-	hciSubLEExtAdv  = 0x0D
-	hciPktEvent     = 0x04
-	extAdvHdrLen    = 24
-	extTxUnavailabl = 127
+	btsnoopHdrLen    = 16
+	btsnoopRecLen    = 24
+	btsnoopMaxPkt    = 1 << 16
+	dlHCIUnenc       = 1001
+	dlHCIUART        = 1002
+	hciEvtLEMeta     = 0x3E
+	hciSubLEAdv      = 0x02
+	hciSubLEExtAdv   = 0x0D
+	hciPktEvent      = 0x04
+	extAdvHdrLen     = 24
+	extTxUnavailable = 127
 )
 
 var btsnoopMagic = []byte("btsnoop\x00")
@@ -124,7 +124,7 @@ func ParseLEAdvertEvent(pkt []byte) []Advert {
 			dl := int(p[extAdvHdrLen-1])
 			a.Random = p[2] != 0
 			a.Addr = fmtAddr(p[3:9])
-			if tx := int8(p[12]); tx != extTxUnavailabl {
+			if tx := int8(p[12]); tx != extTxUnavailable {
 				a.TxPower, a.HasTx = int(tx), true
 			}
 			a.RSSI = int(int8(p[13]))

@@ -127,12 +127,14 @@ func (t *BLETracker) ObserveAddr(addr string, at time.Time) {
 	t.entry(addr, at)
 }
 
+// pruneSamples/pruneTimes reslice instead of copying; the following append
+// reallocates only when the backing array is exhausted (amortized O(1)).
 func pruneSamples(s []bleSample, cutoff time.Time) []bleSample {
 	i := 0
 	for i < len(s) && s[i].at.Before(cutoff) {
 		i++
 	}
-	return append(s[:0:0], s[i:]...)
+	return s[i:]
 }
 
 func pruneTimes(s []time.Time, cutoff time.Time) []time.Time {
@@ -140,7 +142,7 @@ func pruneTimes(s []time.Time, cutoff time.Time) []time.Time {
 	for i < len(s) && s[i].Before(cutoff) {
 		i++
 	}
-	return append(s[:0:0], s[i:]...)
+	return s[i:]
 }
 
 func (t *BLETracker) expireLocked(now time.Time) {
