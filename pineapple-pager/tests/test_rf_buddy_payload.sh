@@ -16,8 +16,9 @@ ERROR_DIALOG() { printf 'ERROR\t%s\n' "$*" >> "$REC"; }
 RINGTONE()     { printf 'RINGTONE\t%s\n' "$*" >> "$REC"; return "${RINGTONE_RC:-0}"; }
 VIBRATE()      { printf 'VIBRATE\t%s\n' "$*" >> "$REC"; }
 killall()      { printf 'KILLALL\t%s\n' "$*" >> "$REC"; }
+hcitool()      { printf 'HCITOOL\t%s\n' "$*" >> "$REC"; }
 _pineap()      { printf 'PINEAP\t%s\n' "$*" >> "$REC"; }
-export -f LOG ERROR_DIALOG RINGTONE VIBRATE killall _pineap
+export -f LOG ERROR_DIALOG RINGTONE VIBRATE killall hcitool _pineap
 export REC
 
 export RF_BUDDY_INSTALL_DIR="$ROOT/src/user/defcon/RF-BUDDY"
@@ -57,7 +58,8 @@ rf_buddy_cleanup
 [ ! -d "$RF_BUDDY_LOCK_DIR" ]; assert_rc "$?" "0" "cleanup releases the lock"
 [ ! -f "$TICK_FILE" ]; assert_rc "$?" "0" "cleanup removes the tick file"
 assert_eq "$(grep -c 'EXAMINE CANCEL' "$REC")" "1" "cleanup releases the channel exactly once"
-assert_eq "$(grep -c '^KILLALL.hcitool' "$REC")" "1" "cleanup stops the BLE scan"
+assert_eq "$(grep -c $'^KILLALL\t-INT hcitool$' "$REC")" "1" "cleanup interrupts the BLE scan"
+assert_eq "$(grep -c $'^HCITOOL\t-i hci0 cmd 0x08 0x000c 00 00$' "$REC")" "1" "cleanup disables LE scanning"
 
 # --- full run with a fake UI binary ----------------------------------------
 FAKE_UI="$TMP/fake-ui"

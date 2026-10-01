@@ -140,7 +140,8 @@ rf_buddy_cleanup() {
     wait "$UI_PID" 2>/dev/null || true
   fi
   UI_PID=""
-  killall hcitool >/dev/null 2>&1 || true
+  killall -INT hcitool >/dev/null 2>&1 || true
+  hcitool -i "$BT_IFACE" cmd 0x08 0x000c 00 00 >/dev/null 2>&1 || true
   rm -f "$TICK_FILE" "$TICK_FILE.tmp" "$READY_FILE"
   release_channel
   rf_lock_release

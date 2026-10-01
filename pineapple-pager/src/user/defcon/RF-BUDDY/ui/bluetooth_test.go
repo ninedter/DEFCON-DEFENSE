@@ -48,3 +48,9 @@ func TestLEScanIsPassive(t *testing.T) {
 		t.Fatalf("leScanArgs = %q", got)
 	}
 }
+
+func TestScanDisableArgs(t *testing.T) {
+	if got := strings.Join(scanDisableArgs("hci0"), " "); got != "-i hci0 cmd 0x08 0x000c 00 00" {
+		t.Fatalf("scanDisableArgs = %q", got)
+	}
+}

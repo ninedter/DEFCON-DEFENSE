@@ -66,13 +66,30 @@ func leScanArgs(iface string) []string {
 	return []string{"-i", iface, "lescan", "--passive", "--duplicates"}
 }
 
+// scanDisableArgs returns the hcitool arguments for LE Set Scan Enable = off.
+func scanDisableArgs(iface string) []string {
+	return []string{"-i", iface, "cmd", "0x08", "0x000c", "00", "00"}
+}
+
+// disableScan turns controller scanning off; errors are ignored.
+func (s *BLEScanner) disableScan(ctx context.Context) {
+	_ = exec.CommandContext(ctx, "hcitool", scanDisableArgs(s.Iface)...).Run()
+}
+
 func (s *BLEScanner) Run(ctx context.Context) {
 	for ctx.Err() == nil {
 		_ = exec.CommandContext(ctx, "hciconfig", s.Iface, "up").Run()
+		s.disableScan(ctx)
 		cmd := exec.CommandContext(ctx, "hcitool", leScanArgs(s.Iface)...)
+		// SIGINT lets hcitool disable scanning itself before Go force-kills.
+		cmd.Cancel = func() error { return cmd.Process.Signal(os.Interrupt) }
+		cmd.WaitDelay = 2 * time.Second
 		if stdout, err := cmd.StdoutPipe(); err == nil && cmd.Start() == nil {
 			s.consume(stdout)
 			_ = cmd.Wait()
+			stopCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			s.disableScan(stopCtx)
+			cancel()
 		}
 		timer := time.NewTimer(s.RestartDelay)
 		select {
