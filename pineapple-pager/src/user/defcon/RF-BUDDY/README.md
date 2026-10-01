@@ -25,7 +25,7 @@ airtime, retry %, AP count, frames per second, and the likely cause.
 | Button | Action |
 |---|---|
 | LEFT / RIGHT | select channel |
-| UP / DOWN | switch 2.4 GHz / 5 GHz |
+| UP / DOWN | cycle tabs: 2.4 GHz / 5 GHz / BT |
 | A | lock on to the selected channel |
 | B | exit |
 
@@ -39,6 +39,31 @@ nearby Bluetooth count. The buzzer tick plays faster as the score rises.
 | UP | tick on/off |
 | A | MARK SPOT — writes a numbered marker to the log |
 | B | back to the overview |
+
+**BT tab** — nearby Bluetooth LE devices, strongest first, with the selected
+device's address, maker, signal, peak, advert rate, TX power and last-seen time.
+
+| Button | Action |
+|---|---|
+| LEFT / RIGHT | select the previous / next device |
+| UP / DOWN | cycle tabs: 2.4 GHz / 5 GHz / BT |
+| A | TRACK the selected device |
+| B | exit |
+
+**BT track** — a walk-around proximity meter for one device: big signal
+strength with VERY CLOSE / CLOSE / NEAR / FAR, closer/farther trend, peak, a
+60-second graph, and which Wi-Fi channels BLE advertising overlaps. The buzzer
+tick speeds up as you get closer.
+
+| Button | Action |
+|---|---|
+| LEFT / RIGHT | track the previous / next device |
+| UP | tick on/off |
+| A | MARK SPOT — writes a numbered marker to the log |
+| B | back to the BT list |
+
+BT marks go in `marks.csv` as `n,epoch,bt,ADDRESS,RSSI,LABEL` (the channel
+column holds the device address, the score column its signal in dBm).
 
 ## Likely causes
 

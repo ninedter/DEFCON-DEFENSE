@@ -1,0 +1,311 @@
+package main
+
+import (
+	"fmt"
+	"image"
+	"image/color"
+	"strconv"
+	"time"
+)
+
+const btVisibleRows = 9
+
+// btIndex returns the index of the selected device, falling back to 0 when the
+// remembered address is gone. ok is false for an empty list.
+func (u *ui) btIndex(list []BLEDevice) (int, bool) {
+	if len(list) == 0 {
+		return 0, false
+	}
+	for i, d := range list {
+		if d.Addr == u.btAddr {
+			return i, true
+		}
+	}
+	return 0, true
+}
+
+func (u *ui) btSelected(list []BLEDevice) (BLEDevice, bool) {
+	i, ok := u.btIndex(list)
+	if !ok {
+		return BLEDevice{}, false
+	}
+	return list[i], true
+}
+
+// moveBT selects the neighbouring device and reports whether the address changed.
+func (u *ui) moveBT(list []BLEDevice, delta int) bool {
+	i, ok := u.btIndex(list)
+	if !ok {
+		return false
+	}
+	prev := u.btAddr
+	u.btAddr = list[clampIndex(i+delta, len(list))].Addr
+	return u.btAddr != prev
+}
+
+func btDelta(button string) int {
+	if button == "LEFT" {
+		return -1
+	}
+	return 1
+}
+
+func (u *ui) handleBT(button string, s Snapshot) bool {
+	switch button {
+	case "B":
+		return true
+	case "LEFT", "RIGHT":
+		u.moveBT(s.BT, btDelta(button))
+	case "UP":
+		u.cycleTab(1)
+	case "DOWN":
+		u.cycleTab(-1)
+	case "A":
+		if d, ok := u.btSelected(s.BT); ok {
+			u.btAddr = d.Addr
+			u.ctrl.TrackBT(d.Addr)
+			u.screen = screenBTTrack
+		}
+	}
+	return false
+}
+
+func (u *ui) handleBTTrack(button string, s Snapshot) bool {
+	switch button {
+	case "B":
+		u.ctrl.UntrackBT()
+		u.screen = screenBT
+	case "LEFT", "RIGHT":
+		if u.moveBT(s.BT, btDelta(button)) {
+			u.ctrl.TrackBT(u.btAddr)
+		}
+	case "UP":
+		u.audio = !u.audio
+	case "A":
+		u.markBT(s)
+	}
+	return false
+}
+
+func (u *ui) markBT(s Snapshot) {
+	t := s.BTTrack
+	if t == nil || u.marks == nil {
+		return
+	}
+	now := u.now()
+	n, err := u.marks.AddMark(Mark{At: now, BT: true, BTAddr: t.Addr, BTLabel: t.Label, RSSI: t.RSSI})
+	if err != nil {
+		u.showToast("MARK NOT SAVED: LOG PAUSED", now)
+		return
+	}
+	u.showToast(fmt.Sprintf("MARK %d @ %s - %d DBM", n, now.Format("15:04"), t.RSSI), now)
+}
+
+// btTickScore maps RSSI -90 dBm -> 20 and -35 dBm -> 100 onto the tick score scale.
+func btTickScore(rssi int) int {
+	return min(100, max(20, 20+(rssi+90)*80/55))
+}
+
+// proximity maps a smoothed RSSI to a walk-around hint.
+func proximity(rssi int) (string, color.RGBA) {
+	switch {
+	case rssi >= -50:
+		return "VERY CLOSE", red
+	case rssi >= -65:
+		return "CLOSE", amber
+	case rssi >= -80:
+		return "NEAR", yellow
+	default:
+		return "FAR", green
+	}
+}
+
+func fmtRSSI(rssi int) string {
+	if rssi <= -100 {
+		return "--"
+	}
+	return strconv.Itoa(rssi)
+}
+
+func (u *ui) renderBT(img *image.RGBA, s Snapshot, now time.Time) {
+	renderTitle(img, "RF-BUDDY", 120)
+	renderTabs(img, 2)
+	status, limit := "BT N/A", 392
+	if s.HasBT {
+		status = fmt.Sprintf("%d DEV  %.0f ADV/S", len(s.BT), s.BTAdvPerSec)
+	}
+	if !s.LogPaused {
+		limit = 430
+	}
+	drawTextBox(img, image.Rect(290, 3, limit, 20), 290, 3, trimCells(status, (limit-290)/textCellWidth), cyan, true, 1)
+	renderClock(img, now, s.LogPaused)
+
+	vLine(img, 260, 24, 198, cyan2)
+	switch {
+	case !s.HasBT:
+		drawText(img, 6, 90, "BLUETOOTH UNAVAILABLE", dim, true, 1)
+	case len(s.BT) == 0:
+		drawText(img, 6, 24, "NEARBY (STRONGEST FIRST)", dim, true, 1)
+		drawText(img, 6, 90, "NO DEVICES YET", dim, true, 1)
+	default:
+		drawText(img, 6, 24, "NEARBY (STRONGEST FIRST)", dim, true, 1)
+		drawTextRightBox(img, image.Rect(214, 24, 256, 40), 24, "DBM", dim, true)
+		sel, _ := u.btIndex(s.BT)
+		top := max(0, sel-(btVisibleRows-1))
+		for row := 0; row < btVisibleRows && top+row < len(s.BT); row++ {
+			d := s.BT[top+row]
+			y := 44 + row*16
+			c := white
+			if top+row == sel {
+				c = yellow
+				drawText(img, 6, y, ">", yellow, true, 1)
+			}
+			drawTextBox(img, image.Rect(14, y, 210, y+16), 14, y, trimCells(d.Label, 24), c, true, 1)
+			drawTextRightBox(img, image.Rect(210, y, 256, y+16), y, fmtRSSI(d.RSSI), signalColor(d.RSSI), true)
+		}
+		renderBTPanel(img, s.BT[sel], now)
+	}
+	renderFooter(img, hint{"B", "EXIT"}, "LEFT/RIGHT DEV", "UP/DN BAND", hint{"A", "TRACK"})
+}
+
+// btAddrText returns the address; short drops the first octet to fit the
+// 16-cell metric value box.
+func btAddrText(d BLEDevice, short bool) string {
+	a := d.Addr
+	if short && len(a) > 3 {
+		a = a[3:]
+	}
+	if d.Random {
+		a += " R"
+	}
+	return a
+}
+
+func secondsAgo(at, now time.Time) int {
+	return max(0, int(now.Sub(at)/time.Second))
+}
+
+func renderBTPanel(img *image.RGBA, d BLEDevice, now time.Time) {
+	box := image.Rect(266, 24, 476, 198)
+	drawTextBox(img, box, 266, 26, trimCells(d.Label, 26), yellow, true, 1)
+	maker := d.Maker
+	if maker == "" {
+		maker = "--"
+	}
+	tx := "--"
+	if d.HasTx {
+		tx = fmt.Sprintf("%d DBM", d.TxPower)
+	}
+	metricRow(img, 52, "ADDR", btAddrText(d, true), cyan)
+	metricRow(img, 68, "MAKER", maker, cyan)
+	metricRow(img, 84, "SIGNAL", fmt.Sprintf("%d DBM", d.RSSI), signalColor(d.RSSI))
+	metricRow(img, 100, "PEAK", fmt.Sprintf("%d DBM", d.Peak), cyan)
+	metricRow(img, 116, "ADV/S", fmt.Sprintf("%.1f", d.AdvPerSec), cyan)
+	metricRow(img, 132, "TX PWR", tx, cyan)
+	metricRow(img, 148, "SEEN", fmt.Sprintf("%d S AGO", secondsAgo(d.LastSeen, now)), cyan)
+}
+
+func (u *ui) renderBTTrack(img *image.RGBA, s Snapshot, now time.Time) {
+	t := s.BTTrack
+	if t == nil {
+		d, _ := u.btSelected(s.BT)
+		if d.Addr == "" {
+			d = BLEDevice{Addr: u.btAddr, Label: "UNKNOWN", RSSI: -100}
+		}
+		t = &BLETrackView{BLEDevice: d, Lost: true, Trend: TrendSteady}
+	}
+	drawTextBox(img, image.Rect(6, 3, 300, 20), 6, 3, trimCells("TRACKING: "+t.Label, 36), yellow, true, 1)
+	if u.audio {
+		drawTextBox(img, image.Rect(300, 3, 390, 20), 300, 3, "AUDIO ON", cyan, true, 1)
+	} else {
+		drawTextBox(img, image.Rect(300, 3, 390, 20), 300, 3, "AUDIO OFF", dim, true, 1)
+	}
+	renderClock(img, now, s.LogPaused)
+	hLine(img, 4, 476, 21, cyan2)
+
+	c, num, level := dim, "--", "SIGNAL LOST"
+	switch {
+	case t.Lost:
+	case t.RSSI <= -100:
+		level = "NO RSSI"
+	default:
+		level, c = proximity(t.RSSI)
+		num = strconv.Itoa(t.RSSI)
+	}
+	stroke(img, image.Rect(6, 26, 132, 196), 1, c)
+	drawTextBox(img, image.Rect(7, 27, 131, 100), 69-textPixelWidth(num, 4)/2, 32, num, c, true, 4)
+	drawCenteredIn(img, 7, 131, 100, level, c)
+	trend, tc := "- STEADY", white
+	switch t.Trend {
+	case TrendRising:
+		trend, tc = "^ CLOSER", red
+	case TrendFalling:
+		trend, tc = "v FARTHER", green
+	}
+	drawCenteredIn(img, 7, 131, 120, trend, tc)
+	peakAt := "--"
+	if !t.PeakAt.IsZero() {
+		peakAt = "@" + t.PeakAt.Format("15:04")
+	}
+	drawCenteredIn(img, 7, 131, 146, fmt.Sprintf("PEAK %d", t.Peak), dim)
+	drawCenteredIn(img, 7, 131, 164, peakAt, dim)
+
+	inline := func(x int, label, value string, vc color.RGBA) {
+		drawText(img, x, 26, label, white, true, 1)
+		vx := x + textPixelWidth(label, 1) + 8
+		drawTextBox(img, image.Rect(vx, 26, 476, 42), vx, 26, value, vc, true, 1)
+	}
+	tx, maker := "--", t.Maker
+	if t.HasTx {
+		tx = strconv.Itoa(t.TxPower)
+	}
+	if maker == "" {
+		maker = "--"
+	}
+	inline(142, "ADV/S", fmt.Sprintf("%.1f", t.AdvPerSec), cyan)
+	inline(252, "TX", tx, cyan)
+	inline(322, "MAKER", trimCells(maker, 12), cyan)
+
+	drawText(img, 142, 44, "LAST 60 S", dim, true, 1)
+	vLine(img, 142, 62, 111, dim)
+	hLine(img, 142, 474, 110, dim)
+	h := t.History
+	point := func(i int) (int, int) {
+		pct := min(100, max(0, (h[i]+100)*100/70))
+		return 143 + i*330/(lockHistoryLen-1), 109 - pct*46/100
+	}
+	pc := func(i int) color.RGBA {
+		if h[i] <= -100 {
+			return dim
+		}
+		return signalColor(h[i])
+	}
+	for i := range h {
+		if i >= lockHistoryLen {
+			break
+		}
+		x, y := point(i)
+		if i == 0 {
+			img.SetRGBA(x, y, pc(i))
+			continue
+		}
+		px, py := point(i - 1)
+		drawLine(img, px, py, x, y, pc(i))
+	}
+
+	drawTextBox(img, image.Rect(142, 114, 476, 130), 142, 114, "ADDR", white, true, 1)
+	drawTextBox(img, image.Rect(190, 114, 476, 130), 190, 114, btAddrText(t.BLEDevice, false), cyan, true, 1)
+	kl, kv := "KIND", t.Kind
+	if t.Name != "" {
+		kl, kv = "NAME", t.Name
+	}
+	if kv == "" {
+		kv = "--"
+	}
+	drawText(img, 142, 132, kl, white, true, 1)
+	drawTextBox(img, image.Rect(190, 132, 476, 148), 190, 132, trimCells(kv, 35), cyan, true, 1)
+	drawText(img, 142, 150, "SEEN", white, true, 1)
+	drawTextBox(img, image.Rect(190, 150, 476, 166), 190, 150, fmt.Sprintf("%d S AGO", secondsAgo(t.LastSeen, now)), cyan, true, 1)
+	drawTextBox(img, image.Rect(142, 176, 476, 192), 142, 176, trimCells("HITS WI-FI CH "+FormatChannelRuns(HitsWiFi()), 41), dim, true, 1)
+	renderFooter(img, hint{"B", "BACK"}, "LEFT/RIGHT DEV", "UP AUDIO", hint{"A", "MARK SPOT"})
+}

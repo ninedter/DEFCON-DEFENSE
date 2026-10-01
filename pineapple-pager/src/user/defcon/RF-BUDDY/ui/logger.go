@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -41,6 +42,11 @@ type Mark struct {
 	Channel Channel
 	Score   int
 	Likely  string
+	// BT marks (BT == true) come from the BT track screen.
+	BT      bool
+	BTAddr  string
+	BTLabel string
+	RSSI    int
 }
 
 type SampleSink interface {
@@ -153,6 +159,10 @@ func (l *Logger) AddMark(m Mark) (int, error) {
 	}
 	l.markCount++
 	line := fmt.Sprintf("%d,%d,%s,%d,%d,%s\n", l.markCount, m.At.Unix(), m.Channel.Band.LogName(), m.Channel.Number, m.Score, m.Likely)
+	if m.BT {
+		label := strings.NewReplacer(",", "", "\n", " ", "\r", " ").Replace(m.BTLabel)
+		line = fmt.Sprintf("%d,%d,bt,%s,%d,%s\n", l.markCount, m.At.Unix(), m.BTAddr, m.RSSI, label)
+	}
 	if _, err := io.WriteString(l.marks, line); err != nil {
 		l.markCount--
 		return 0, err

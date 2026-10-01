@@ -219,8 +219,8 @@ func TestRenderPreviewsWritesEveryState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 9 {
-		t.Fatalf("previews = %d, want 9", len(entries))
+	if len(entries) != 14 {
+		t.Fatalf("previews = %d, want 14", len(entries))
 	}
 	if _, err := os.Stat(filepath.Join(dir, "05-lock.png")); err != nil {
 		t.Fatal(err)
@@ -243,4 +243,156 @@ func TestRadioErrorStripShowsUnlessToastIsUp(t *testing.T) {
 	if got := u.Render(s, clock.Now()).RGBAAt(6, 184); got == red {
 		t.Fatal("no strip when the radio is healthy")
 	}
+}
+
+func btSnap(addrs ...string) Snapshot {
+	s := uiSnapshot()
+	s.HasBT = true
+	for i, a := range addrs {
+		s.BT = append(s.BT, BLEDevice{Addr: a, Label: "DEV " + a, RSSI: -50 - i*5, Peak: -45, LastSeen: time.Unix(0, 0)})
+	}
+	return s
+}
+
+func TestTabCycle(t *testing.T) {
+	u, ctrl, _, _ := overviewUI(t)
+	s := btSnap()
+	u.HandleButton("UP", s)
+	if u.screen != screenOverview || u.band != Band5 {
+		t.Fatalf("UP #1: screen=%d band=%d", u.screen, u.band)
+	}
+	u.HandleButton("UP", s)
+	if u.screen != screenBT || len(ctrl.bands) != 1 {
+		t.Fatalf("UP #2: screen=%d bands=%v (BT must not retune)", u.screen, ctrl.bands)
+	}
+	u.HandleButton("UP", s)
+	if u.screen != screenOverview || u.band != Band24 || len(ctrl.bands) != 2 || ctrl.bands[1] != Band24 {
+		t.Fatalf("UP #3: screen=%d band=%d bands=%v", u.screen, u.band, ctrl.bands)
+	}
+	u.HandleButton("DOWN", s)
+	if u.screen != screenBT {
+		t.Fatalf("DOWN from 2.4 must reach BT, screen=%d", u.screen)
+	}
+	u.HandleButton("DOWN", s)
+	if u.screen != screenOverview || u.band != Band5 || ctrl.bands[len(ctrl.bands)-1] != Band5 {
+		t.Fatalf("DOWN from BT: screen=%d band=%d bands=%v", u.screen, u.band, ctrl.bands)
+	}
+	if u.LiveBT() {
+		t.Fatal("LiveBT must be false on Wi-Fi tabs")
+	}
+}
+
+func TestBTSelectionByAddress(t *testing.T) {
+	u, ctrl, _, _ := overviewUI(t)
+	s := btSnap("A", "B", "C")
+	u.HandleButton("UP", s)
+	u.HandleButton("UP", s)
+	if !u.LiveBT() {
+		t.Fatal("LiveBT must be true on the BT overview")
+	}
+	u.HandleButton("RIGHT", s)
+	u.HandleButton("RIGHT", s)
+	u.HandleButton("RIGHT", s) // clamps
+	if u.btAddr != "C" {
+		t.Fatalf("btAddr = %q, want C", u.btAddr)
+	}
+	// re-sorted list: selection follows the address
+	re := btSnap("C", "A", "B")
+	u.HandleButton("LEFT", re)
+	if u.btAddr != "C" { // C is index 0; LEFT clamps
+		t.Fatalf("after re-sort LEFT btAddr = %q", u.btAddr)
+	}
+	u.HandleButton("RIGHT", re)
+	if u.btAddr != "A" {
+		t.Fatalf("after re-sort RIGHT btAddr = %q, want A", u.btAddr)
+	}
+	// selected address vanished: fall back to index 0
+	gone := btSnap("X", "Y")
+	if d, _ := u.btSelected(gone.BT); d.Addr != "X" {
+		t.Fatalf("fallback selection = %q", d.Addr)
+	}
+	u.HandleButton("A", gone)
+	if len(ctrl.tracked) != 1 || ctrl.tracked[0] != "X" || u.screen != screenBTTrack {
+		t.Fatalf("tracked=%v screen=%d", ctrl.tracked, u.screen)
+	}
+}
+
+func TestBTTrackAWithNoDevicesIsNoop(t *testing.T) {
+	u, ctrl, _, _ := overviewUI(t)
+	u.screen = screenBT
+	u.HandleButton("A", btSnap())
+	if u.screen != screenBT || len(ctrl.tracked) != 0 {
+		t.Fatalf("screen=%d tracked=%v", u.screen, ctrl.tracked)
+	}
+}
+
+func TestBTTrackButtons(t *testing.T) {
+	u, ctrl, marks, clock := overviewUI(t)
+	s := btSnap("A", "B", "C")
+	u.screen, u.btAddr = screenBT, "A"
+	u.HandleButton("A", s)
+	u.HandleButton("RIGHT", s)
+	u.HandleButton("LEFT", s)
+	u.HandleButton("LEFT", s) // clamped, no extra TrackBT
+	if got := strings.Join(ctrl.tracked, ","); got != "A,B,A" {
+		t.Fatalf("tracked = %s", got)
+	}
+	u.HandleButton("UP", s)
+	if u.audio {
+		t.Fatal("UP must toggle audio")
+	}
+	s.BTTrack = &BLETrackView{BLEDevice: BLEDevice{Addr: "A", Label: "DEV A", RSSI: -61}}
+	u.HandleButton("A", s)
+	if len(marks.marks) != 1 || !marks.marks[0].BT || marks.marks[0].BTAddr != "A" || marks.marks[0].RSSI != -61 || marks.marks[0].BTLabel != "DEV A" {
+		t.Fatalf("marks = %+v", marks.marks)
+	}
+	want := "MARK 3 @ " + clock.Now().Format("15:04") + " - -61 DBM"
+	if u.toast != want {
+		t.Fatalf("toast = %q, want %q", u.toast, want)
+	}
+	if exit := u.HandleButton("B", s); exit || ctrl.untracks != 1 || u.screen != screenBT {
+		t.Fatalf("B: exit=%v untracks=%d screen=%d", exit, ctrl.untracks, u.screen)
+	}
+}
+
+func TestBTTickInterval(t *testing.T) {
+	u, _, _, _ := overviewUI(t)
+	u.screen = screenBTTrack
+	at := func(rssi int, lost bool) Snapshot {
+		return Snapshot{BTTrack: &BLETrackView{BLEDevice: BLEDevice{RSSI: rssi}, Lost: lost}}
+	}
+	if got := u.TickInterval(at(-90, false)); got != 2*time.Second {
+		t.Fatalf("-90 dBm = %v", got)
+	}
+	if got := u.TickInterval(at(-35, false)); got != 300*time.Millisecond {
+		t.Fatalf("-35 dBm = %v", got)
+	}
+	if got := u.TickInterval(at(-20, false)); got != 300*time.Millisecond {
+		t.Fatalf("-20 dBm must clamp, got %v", got)
+	}
+	if got := u.TickInterval(at(-50, true)); got != 0 {
+		t.Fatalf("lost = %v", got)
+	}
+	if got := u.TickInterval(Snapshot{}); got != 0 {
+		t.Fatalf("no track = %v", got)
+	}
+	u.audio = false
+	if got := u.TickInterval(at(-50, false)); got != 0 {
+		t.Fatalf("audio off = %v", got)
+	}
+}
+
+func TestBTRenderSmoke(t *testing.T) {
+	now := time.Date(2026, 10, 1, 12, 42, 0, 0, time.Local)
+	for _, c := range previewCases(now) {
+		if img := c.ui().Render(c.snap, now); img == nil || img.Bounds().Dx() != screenWidth {
+			t.Fatalf("%s did not render", c.name)
+		}
+	}
+	// selected row beyond the visible window, and a track with no snapshot data
+	u := newUI(nil, nil, func() time.Time { return now })
+	u.screen, u.btAddr = screenBT, "88:99:AA:BB:CC:DD"
+	u.Render(previewBTSnapshot(now), now)
+	u.screen = screenBTTrack
+	u.Render(Snapshot{HasBT: true}, now)
 }

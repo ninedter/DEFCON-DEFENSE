@@ -16,6 +16,8 @@ const (
 	screenOverview
 	screenLock
 	screenFatal
+	screenBT
+	screenBTTrack
 )
 
 const (
@@ -44,6 +46,7 @@ type ui struct {
 	probed     bool
 	probeUntil time.Time
 	band       Band
+	btAddr     string
 	selected   [2]int
 	audio      bool
 	toast      string
@@ -67,7 +70,7 @@ func (u *ui) SetProbe(c Capabilities) {
 }
 
 // LiveBT reports whether a BT screen is showing and needs periodic redraws.
-func (u *ui) LiveBT() bool { return false }
+func (u *ui) LiveBT() bool { return u.screen == screenBT || u.screen == screenBTTrack }
 
 // Advance applies time-based transitions and reports whether the screen changed.
 func (u *ui) Advance(now time.Time) bool {
@@ -94,15 +97,20 @@ func (u *ui) HandleButton(button string, s Snapshot) (exit bool) {
 			u.moveSelection(list, -1)
 		case "RIGHT":
 			u.moveSelection(list, 1)
-		case "UP", "DOWN":
-			u.band = u.band.Other()
-			u.ctrl.SetBand(u.band)
+		case "UP":
+			u.cycleTab(1)
+		case "DOWN":
+			u.cycleTab(-1)
 		case "A":
 			if v, ok := u.selectedView(list); ok && !v.Skipped {
 				u.ctrl.Lock(v.Channel)
 				u.screen = screenLock
 			}
 		}
+	case screenBT:
+		return u.handleBT(button, s)
+	case screenBTTrack:
+		return u.handleBTTrack(button, s)
 	case screenLock:
 		list := s.Channels(u.band)
 		switch button {
@@ -126,6 +134,22 @@ func (u *ui) HandleButton(button string, s Snapshot) (exit bool) {
 		}
 	}
 	return false
+}
+
+// cycleTab moves through the tabs 2.4 GHz -> 5 GHz -> BT. Wi-Fi tabs retune the
+// sweep; the BT tab leaves it alone.
+func (u *ui) cycleTab(delta int) {
+	cur := int(u.band)
+	if u.screen == screenBT {
+		cur = 2
+	}
+	next := (cur + delta + 3) % 3
+	if next == 2 {
+		u.screen = screenBT
+		return
+	}
+	u.screen, u.band = screenOverview, Band(next)
+	u.ctrl.SetBand(u.band)
 }
 
 func (u *ui) moveSelection(list []ChannelView, delta int) bool {
@@ -177,6 +201,13 @@ func (u *ui) showToast(text string, now time.Time) {
 }
 
 func (u *ui) TickInterval(s Snapshot) time.Duration {
+	if u.screen == screenBTTrack {
+		t := s.BTTrack
+		if !u.audio || t == nil || t.Lost || t.RSSI <= -100 {
+			return 0
+		}
+		return TickInterval(btTickScore(t.RSSI))
+	}
 	if u.screen != screenLock || !u.audio || s.Lock == nil || !s.Lock.Measured {
 		return 0
 	}
@@ -207,6 +238,10 @@ func (u *ui) Render(s Snapshot, now time.Time) *image.RGBA {
 		u.renderLock(img, s, now)
 	case screenFatal:
 		u.renderFatal(img, now)
+	case screenBT:
+		u.renderBT(img, s, now)
+	case screenBTTrack:
+		u.renderBTTrack(img, s, now)
 	}
 	if u.toast != "" {
 		fill(img, image.Rect(6, 172, 474, 196), black)
@@ -353,26 +388,29 @@ func (u *ui) renderFatal(img *image.RGBA, now time.Time) {
 	drawButtonHint(img, 6, 204, "B", "EXIT", white)
 }
 
-func (u *ui) renderOverview(img *image.RGBA, s Snapshot, now time.Time) {
-	renderTitle(img, "RF-BUDDY", 120)
-	for _, b := range []Band{Band24, Band5} {
-		x := 130
-		if b == Band5 {
-			x = 200
-		}
-		label := b.Label()
-		if b == u.band {
-			fill(img, image.Rect(x, 3, x+textPixelWidth(label, 1)+6, 19), yellow)
-			drawText(img, x+3, 3, label, black, true, 1)
+// renderTabs draws the three header tabs; the active one is yellow-filled.
+func renderTabs(img *image.RGBA, active int) {
+	for i, t := range []struct {
+		x     int
+		label string
+	}{{130, Band24.Label()}, {200, Band5.Label()}, {254, "BT"}} {
+		if i == active {
+			fill(img, image.Rect(t.x, 3, t.x+textPixelWidth(t.label, 1)+6, 19), yellow)
+			drawText(img, t.x+3, 3, t.label, black, true, 1)
 		} else {
-			drawText(img, x+3, 3, label, dim, true, 1)
+			drawText(img, t.x+3, 3, t.label, dim, true, 1)
 		}
 	}
+}
+
+func (u *ui) renderOverview(img *image.RGBA, s Snapshot, now time.Time) {
+	renderTitle(img, "RF-BUDDY", 120)
+	renderTabs(img, int(u.band))
 	bt := "BT N/A"
 	if s.HasBT {
 		bt = fmt.Sprintf("BT %d", s.BTCount)
 	}
-	drawTextBox(img, image.Rect(270, 3, 380, 20), 270, 3, trimCells(bt, 13), cyan, true, 1)
+	drawTextBox(img, image.Rect(290, 3, 392, 20), 290, 3, trimCells(bt, 12), cyan, true, 1)
 	renderClock(img, now, s.LogPaused)
 
 	list := s.Channels(u.band)

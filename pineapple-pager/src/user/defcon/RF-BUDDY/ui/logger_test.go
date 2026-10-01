@@ -67,6 +67,21 @@ func TestLoggerMarksAreNumbered(t *testing.T) {
 	}
 }
 
+func TestLoggerBTMarkRow(t *testing.T) {
+	l, err := OpenLogger(t.TempDir(), logStart, 1<<20, 64<<20, plentyFree, func() time.Time { return logStart })
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	if _, err := l.AddMark(Mark{At: logStart, BT: true, BTAddr: "74:4D:BD:CD:0F:C5", BTLabel: "NANO,LEAF\nSTRIP", RSSI: -55}); err != nil {
+		t.Fatal(err)
+	}
+	got := readFile(t, filepath.Join(l.Dir(), "marks.csv"))
+	if got != "mark,epoch,band,channel,score,likely\n1,1790858525,bt,74:4D:BD:CD:0F:C5,-55,NANOLEAF STRIP\n" {
+		t.Fatalf("marks.csv = %q", got)
+	}
+}
+
 func TestLoggerStopsAtSizeCap(t *testing.T) {
 	sample := Sample{At: logStart, Channel: Channel{Band24, 1}, Score: 10, Likely: CauseClean}
 	maxBytes := int64(len(samplesHeader) + len(formatSample(sample)))

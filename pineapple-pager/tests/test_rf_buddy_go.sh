@@ -21,7 +21,7 @@ assert_rc "$?" "0" "RF-BUDDY vets for the Pager MIPS target"
 
 (cd "$UI" && go run -mod=vendor . -preview-dir "$TMP/previews")
 assert_rc "$?" "0" "RF-BUDDY renders preview screens"
-assert_eq "$(find "$TMP/previews" -name '*.png' | wc -l | tr -d ' ')" "9" "all nine preview states rendered"
+assert_eq "$(find "$TMP/previews" -name '*.png' | wc -l | tr -d ' ')" "14" "all fourteen preview states rendered"
 
 command -v rg >/dev/null 2>&1; assert_rc "$?" "0" "rg is available for the passive-only check"
 rg -n -g '!*_test.go' -g '!vendor/**' -e 'Sendto|Sendmsg|syscall\.Write|txpower|PINEAPPLE_DEAUTH|aireplay|mdk[34]|"set", "channel"' "$UI" >/dev/null 2>&1
