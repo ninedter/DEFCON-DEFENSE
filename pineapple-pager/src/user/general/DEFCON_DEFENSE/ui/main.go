@@ -706,6 +706,9 @@ func readButtonDevice(ctx context.Context, inputDevice string, out chan<- string
 		return err
 	}
 	defer f.Close()
+	// Best effort: without the grab, buttons still work but the frozen
+	// firmware menu may replay them after exit.
+	_ = grabInput(int(f.Fd()))
 	return readButtonFile(ctx, f, out, time.Now())
 }
 

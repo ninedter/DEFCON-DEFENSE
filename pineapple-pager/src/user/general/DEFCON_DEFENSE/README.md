@@ -4,7 +4,7 @@ The single visible Pager entry point for the defensive payload package. It
 combines passive 2.4/5 GHz monitoring, local alerting, evidence review, and the
 curated manual tools in one menu.
 
-Open it from **Payloads > General > DEFCON Defense**. Version 4.19 runs a
+Open it from **Payloads > General > DEFCON Defense**. Version 4.20 runs a
 dedicated full-screen MIPS application with these designed
 480x222 Pager interfaces:
 
@@ -23,6 +23,11 @@ dedicated full-screen MIPS application with these designed
 The same rendered canvas appears on the physical Pager and in authenticated
 Virtual Pager. The bridge is active only while the application is running and
 falls back to the stock Pager display when it exits.
+
+While the application is open it freezes the stock Pager UI process (SIGSTOP)
+and takes exclusive use of the buttons; pressing B on the general screen
+resumes it (SIGCONT), so the Pager menu returns immediately instead of
+restarting through "Initializing system".
 
 Long-running sessions use bounded Recon calls, unique atomic state updates,
 low-churn Virtual Pager long polling, a periodically refreshed physical-input

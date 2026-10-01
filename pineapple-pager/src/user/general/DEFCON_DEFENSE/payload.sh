@@ -2,7 +2,7 @@
 # Title: DEFCON Defense
 # Description: Unified passive 2.4/5 GHz monitoring, alerting, evidence, and defensive-tool launcher.
 # Author: Henry Hu
-# Version: 4.19
+# Version: 4.20
 # Category: General
 
 PAYLOAD_ROOT="/root/payloads"
@@ -63,41 +63,83 @@ pager_firmware_ui_running() {
   return 1
 }
 
+# Firmware commands that reach the stock `pineapple` process through
+# /tmp/api.sock. While that process is frozen they would block forever and
+# then fire stale dialogs/alerts the moment the menu resumes, so session
+# workers get inert stand-ins until the firmware UI is running again.
+PAGER_API_COMMANDS="LOG ALERT ALERT_RINGTONE RINGTONE VIBRATE ERROR_DIALOG PROMPT LIST_PICKER CONFIRMATION_DIALOG WAIT_FOR_INPUT WAIT_FOR_BUTTON_PRESS START_SPINNER STOP_SPINNER PINEAPPLE_SET_BANDS PINEAPPLE_EXAMINE_BSSID PINEAPPLE_EXAMINE_CHANNEL PINEAPPLE_EXAMINE_RESET"
+PAGER_FROZEN_PIDS=""
+PAGER_PORTAL_REDIRECTED=0
+PAGER_PORTAL_TABLE="defcon_defense_portal"
+CUSTOM_UI_PORTAL_PORT=1473
+
+pager_api_commands_disable() {
+  local cmd
+  for cmd in $PAGER_API_COMMANDS; do
+    eval "$cmd() { return 1; }"
+  done
+}
+
+pager_api_commands_enable() {
+  local cmd
+  for cmd in $PAGER_API_COMMANDS; do
+    unset -f "$cmd" 2>/dev/null || true
+  done
+}
+
+pager_portal_redirect_start() {
+  # The frozen firmware keeps its :1471 listener, so new Virtual Pager
+  # connections would hang. Steer only new USB-management connections to the
+  # renderer's static portal; established flows and every other port are
+  # untouched, and deleting the private table restores the stock path.
+  command -v nft >/dev/null 2>&1 || return 0
+  nft delete table inet "$PAGER_PORTAL_TABLE" >/dev/null 2>&1 || true
+  nft -f - >/dev/null 2>&1 <<NFT || return 0
+table inet $PAGER_PORTAL_TABLE {
+  chain prerouting {
+    type nat hook prerouting priority dstnat - 1; policy accept;
+    ip daddr 172.16.52.1 tcp dport 1471 redirect to :$CUSTOM_UI_PORTAL_PORT
+  }
+}
+NFT
+  PAGER_PORTAL_REDIRECTED=1
+}
+
+pager_portal_redirect_stop() {
+  [ "$PAGER_PORTAL_REDIRECTED" = "1" ] || return 0
+  nft delete table inet "$PAGER_PORTAL_TABLE" >/dev/null 2>&1 || true
+  PAGER_PORTAL_REDIRECTED=0
+}
+
 stop_pager_service_for_custom_ui() {
-  [ -x /etc/init.d/pineapplepager ] || return 0
-  if pager_firmware_ui_running; then
-    # Pager 24.10.1's stop_service() targets pineapd by mistake and leaves the
-    # framebuffer-owning pineapple process alive. Delete only this procd
-    # service instance; normal init start below recreates it on UI exit.
-    if command -v ubus >/dev/null 2>&1; then
-      ubus call service delete '{"name":"pineapplepager"}' >/dev/null 2>&1 || return 1
-    else
-      /etc/init.d/pineapplepager stop >/dev/null 2>&1 || return 1
-    fi
-    local _
-    for _ in 1 2 3 4 5 6 7 8 9 10; do
-      pager_firmware_ui_running || break
-      sleep 0.1
-    done
-    pager_firmware_ui_running && return 1
-    PAGER_SERVICE_STOPPED_BY_DEFCON=1
-    # Let the launch key release and the stock framebuffer writer fully stop
-    # before the custom renderer accepts input or commits its first frame.
-    sleep 0.3
-  fi
+  # The stock pineapple process owns /dev/fb0 and event0. Freeze it instead
+  # of deleting its procd service: SIGCONT hands the menu back instantly on
+  # exit, whereas a service restart cold-boots the firmware UI ("Initializing
+  # system", ~20 s) and replaces the process that launched this payload.
+  local pids
+  pids="$(pidof pineapple 2>/dev/null)"
+  [ -n "$pids" ] || return 0
+  pager_api_commands_disable
+  # shellcheck disable=SC2086
+  kill -STOP $pids 2>/dev/null || { pager_api_commands_enable; return 1; }
+  PAGER_FROZEN_PIDS="$pids"
+  PAGER_SERVICE_STOPPED_BY_DEFCON=1
+  pager_portal_redirect_start
 }
 
 restore_pager_service() {
-  [ -x /etc/init.d/pineapplepager ] || return 0
-  # Some firmware launch paths stop the stock UI before payload.sh runs, so
-  # there is no live `pineapple` process for the handoff code to mark. Either
-  # way, leaving our native UI must restore the firmware menu. The process
-  # check also makes repeated cleanup calls harmless.
-  if [ "$PAGER_SERVICE_STOPPED_BY_DEFCON" != "1" ] && pager_firmware_ui_running; then
-    return 0
+  pager_portal_redirect_stop
+  if [ -n "$PAGER_FROZEN_PIDS" ]; then
+    # shellcheck disable=SC2086
+    kill -CONT $PAGER_FROZEN_PIDS 2>/dev/null || true
+    PAGER_FROZEN_PIDS=""
   fi
+  pager_api_commands_enable
   PAGER_SERVICE_STOPPED_BY_DEFCON=0
-  /etc/init.d/pineapplepager start >/dev/null 2>&1 || true
+  # Repeated cleanup calls are harmless. Only if the firmware UI vanished
+  # during the session (crash, external stop) does it need a full start.
+  [ -x /etc/init.d/pineapplepager ] || return 0
+  pager_firmware_ui_running || /etc/init.d/pineapplepager start >/dev/null 2>&1 || true
 }
 
 ensure_ui_http_token() {
@@ -176,7 +218,7 @@ launch_custom_ui_process() {
       --pcap-dir "$PCAP_DIR" \
       --action-file "$UI_ACTION" \
       --mute-file "$UI_MUTE" \
-      --portal-listen 172.16.52.1:1471 \
+      --portal-listen "172.16.52.1:$CUSTOM_UI_PORTAL_PORT" \
       --portal-root /pineapple/ui \
       --virtual-listen 172.16.52.1:1472 \
       --virtual-token-file "$UI_HTTP_TOKEN_FILE" &
@@ -189,7 +231,7 @@ launch_custom_ui_process() {
       --pcap-dir "$PCAP_DIR" \
       --action-file "$UI_ACTION" \
       --mute-file "$UI_MUTE" \
-      --portal-listen 172.16.52.1:1471 \
+      --portal-listen "172.16.52.1:$CUSTOM_UI_PORTAL_PORT" \
       --portal-root /pineapple/ui \
       --virtual-listen 172.16.52.1:1472 \
       --virtual-token-file "$UI_HTTP_TOKEN_FILE" &
@@ -890,6 +932,9 @@ custom_ui_session() {
   fi
   wait "$CUSTOM_UI_PID"
   ui_rc=$?
+  # Hand the screen and buttons back the moment the renderer exits; worker
+  # shutdown below no longer leaves a stale frame up while B looks ignored.
+  restore_pager_service
   CUSTOM_UI_PID=""
   rm -f "$CUSTOM_UI_READY"
   CUSTOM_UI_READY=""
