@@ -1,6 +1,6 @@
 # RF-BUDDY — Office 2.4/5 GHz Interference Finder for the Pager
 
-**Date:** 2026-10-01 (revised 2026-10-02 after on-device checks)
+**Date:** 2026-10-01 (revised 2026-10-02 after on-device checks; v1.1 standalone redesign)
 **Status:** Design — approved
 **Author:** Henry Hu (with Claude Code)
 
@@ -19,29 +19,37 @@ timestamped log plus operator-dropped **marks** support later review.
 ## Posture
 
 - **Passive only.** RF-BUDDY listens; it never transmits frames, deauths, or probes.
-- **Separate payload** from DEFCON Defense, with its own launcher, binary, lock, and logs.
+- **Standalone payload**, independent of DEFCON Defense: own launcher, binary, lock, viewer page (port 1474), and logs. It shares no files, ports, or loot with it.
 
 ## Payload organisation
 
-Both custom payloads move out of the crowded `user/general` menu into a new category:
+RF-BUDDY gets its own menu category; DEFCON Defense is not moved and stays where it is on main:
 
 ```
-/root/payloads/user/defcon/
-  DEFCON-DEFENSE/     (moved from user/general/DEFCON_DEFENSE, renamed)
-  RF-BUDDY/           (new)
+/root/payloads/user/defcon/RF-BUDDY/     (this payload)
+/root/payloads/user/general/DEFCON_DEFENSE/   (unchanged, not part of this work)
 ```
 
-- The repo mirrors this: `src/user/defcon/DEFCON-DEFENSE/`, `src/user/defcon/RF-BUDDY/`.
-- **Hyphens, not underscores**, in payload folder names. Shell variable names
-  (`DEFCON_DEFENSE_INSTALL_DIR`, `RF_BUDDY_*`) keep underscores because Bash requires it.
-- DEFCON Defense's loot directory stays `/root/loot/defcon_defense` so existing baselines,
-  watched networks, findings, and the PCAP index keep working.
+- The repo mirrors this: `src/user/defcon/RF-BUDDY/` and `src/user/general/DEFCON_DEFENSE/`.
+- **Independence rules.** RF-BUDDY files live only in `src/user/defcon/RF-BUDDY/`; runtime
+  state only in `/tmp/rf_buddy*` and `/root/loot/rf_buddy/`. It never touches `/pineapple/ui/*`,
+  any other payload directory, DEFCON loot, or ports 1472/1473, and never `killall`/`pkill`s
+  shared tool names. Its remote viewer is its own page on port 1474.
+- The only shared-system actions, all reverted on every exit path: freeze/resume the stock
+  `pineapple` process; `_pineap EXAMINE CHANNEL/CANCEL`; an exclusive grab of
+  `/dev/input/event0` (released when the fd closes); buzzer pulses with the saved and restored
+  `frequency` and `volume`.
+- No hak5 API commands (`LOG`, `ERROR_DIALOG`, `RINGTONE`, `VIBRATE`, `PINEAPPLE_*`, ...) run
+  between freezing and resuming `pineapple`, because they stop working while it is frozen.
+- `payload.sh` exports a default `PATH` (`/usr/sbin:/usr/bin:/sbin:/bin`) when the runner
+  starts it without one; the UI binary also sets one for itself.
+- **Hyphens, not underscores**, in the payload folder name; shell variables (`RF_BUDDY_*`)
+  keep underscores.
 - The Pager menu only shows categories listed in `/etc/config/payloads`
-  (`list payloaddir 'user/...'` in the anonymous `directories` section, addressed as `payloads.@directories[0]`). Folders on disk that are not listed (e.g.
-  `user/examples`, `user/known_unstable`) are hidden. Installation must therefore add
-  `user/defcon` with `uci add_list 'payloads.@directories[0].payloaddir=user/defcon'` and
-  `uci commit payloads`. A firmware update may reset this list; re-running the deploy
-  script restores it.
+  (`list payloaddir 'user/...'` in the anonymous `directories` section, addressed as `payloads.@directories[0]`).
+  Installation therefore adds `user/defcon` with
+  `uci add_list 'payloads.@directories[0].payloaddir=user/defcon'` and `uci commit payloads`.
+  A firmware update may reset this list; re-running the deploy script restores it.
 
 ## Verified device facts (Pager, firmware hak5ver 107, kernel 6.6.86)
 
@@ -57,8 +65,8 @@ Both custom payloads move out of the crowded `user/general` menu into a new cate
 - Passive capture on `wlan1mon` delivers radiotap frames with TSFT, legacy rate,
   channel, dBm signal, and further fields (bit 22 present); the 802.11 retry flag is
   readable. On channel 6 the office AP `NINEDTER` was heard at −67 dBm.
-- `hcitool`, `hciconfig`, and `hci0` exist; `RINGTONE`, `VIBRATE`, `_pineap`, and
-  `PINEAPPLE_SET_BANDS` are in `/usr/bin`.
+- `hcitool`, `hciconfig`, and `hci0` exist; `_pineap` is in `/usr/bin`. The buzzer is
+  `/sys/class/leds/buzzer` (`frequency`, `volume`, `brightness`).
 
 ## Payload layout
 
@@ -67,10 +75,10 @@ Both custom payloads move out of the crowded `user/general` menu into a new cate
 ```
 RF-BUDDY/
   README.md
-  payload.sh         CONFIG block, lock file, tick loop, bridge install, start UI,
-                     cleanup trap (EXAMINE CANCEL, stop hcitool)
-  ui/                Go program, static MIPS32 soft-float (same build as DEFCON-DEFENSE/ui)
-    display.go       framebuffer, input, Virtual Pager mirror (copied, not shared)
+  payload.sh         CONFIG block, PATH export, lock file, start UI, stock-UI freeze/resume,
+                     freeze watchdog, cleanup trap (EXAMINE CANCEL, stop hcitool, buzzer reset)
+  ui/                Go program, static MIPS32 soft-float
+    display.go       framebuffer, exclusive input grab, own viewer page on :1474
     channels.go      band/channel model
     score.go         metrics, score, LIKELY rules
     recon.go         Recon JSON parser + AP inventory
@@ -85,13 +93,12 @@ RF-BUDDY/
     main.go          wiring
 ```
 
-`build.sh`/`package.sh` build and ship it like DEFCON-DEFENSE (binary `rf-buddy-ui`, `ui/`
-source removed, mode 755; the DEFCON-DEFENSE Virtual Pager bridge is copied in).
-A new `deploy.sh` installs the built tree on the Pager over SSH (see Deployment).
+`build.sh`/`package.sh` build and ship it (binary `rf-buddy-ui`, `ui/` source removed,
+mode 755). `deploy.sh` installs the built tree on the Pager over SSH (see Deployment).
 
-The Go binary does sampling, scoring, rendering, and logging itself (a 1 Hz meter cannot
-afford shell + temp-file IPC). Display/input/mirror plumbing is copied from
-DEFCON-DEFENSE's `ui/main.go`, not refactored into a shared package.
+The Go binary does sampling, scoring, rendering, logging, the viewer page, and the buzzer
+tick itself (a 1 Hz meter cannot afford shell + temp-file IPC). Its display/input plumbing
+was copied from DEFCON-DEFENSE's UI and shares no code or files with it.
 
 ## Configuration (`payload.sh` CONFIG block)
 
@@ -106,7 +113,8 @@ DEFCON-DEFENSE's `ui/main.go`, not refactored into a shared package.
 | `WEAK_SIGNAL_DBM` | `-70` | Office AP signal below this → `WEAK COVERAGE`. |
 | `LOG_MAX_MB` | `20` | Per-session log cap. |
 | `MIN_FREE_MB` | `64` | Logging pauses below this free space. |
-| `TICK_RINGTONE` | `"tick:d=32,o=6,b=200:c"` | Lock-on tick: inline RTTTL or any ringtone name; played with `RINGTONE`, falls back to `VIBRATE` with the same pattern. |
+| `TICK_FREQ_HZ` | `2000` | Buzzer pitch of the lock-on tick, Hz. |
+| `TICK_VOLUME` | `128` | Buzzer loudness of the lock-on tick, 0-255. |
 
 ## Measurement
 
@@ -192,8 +200,8 @@ Rules whose inputs are `N/A` are skipped.
 ## UI
 
 480×222, DEFCON-DEFENSE visual language (black background, yellow headings, cyan
-dividers, green/amber/red status). Rendered to the physical display and mirrored to
-Virtual Pager. **Footers place B on the left and A on the right**, matching the physical
+dividers, green/amber/red status). Rendered to the physical display and served live, with on-page buttons, at
+`http://172.16.52.1:1474` (RF-BUDDY's own viewer; the stock Virtual Pager on `:1471` is not used). **Footers place B on the left and A on the right**, matching the physical
 buttons (red B left, green A right). Score colours: green `< 40`, amber `40–69`,
 red `≥ 70`.
 
@@ -221,9 +229,9 @@ TO ONE CHANNEL AT A TIME`. Advances to Overview after 2 s.
 - Right: `AIR`, `RETRY`, `FR/S`; 60-second rolling score graph; top 2 transmitters
   (SSID or BSSID, dBm); `BT/BLE NEARBY <n> DEV`.
 - Tick: interval 2 s at score 20 → 0.3 s at 100; off below 20; toggled with UP. The UI
-  writes the interval (ms, `0` = off) to a tick file; a `payload.sh` loop plays
-  `RINGTONE $TICK_RINGTONE` (default an inline RTTTL beep), falling back to
-  `VIBRATE $TICK_RINGTONE` with the same pattern.
+  binary pulses the buzzer itself at `TICK_FREQ_HZ` / `TICK_VOLUME` (`--tick-freq-hz`,
+  `--tick-volume`), saving and restoring the buzzer's `frequency` and `volume`; a backstop
+  in `payload.sh` and the watchdog silence it if the UI dies. No ringtone or vibrate API is used.
 - Footer: `B BACK` · `LEFT/RIGHT CH` · `UP AUDIO` · `A MARK SPOT`.
 - `MARK SPOT` appends a numbered mark to `marks.csv` and toasts
   `MARK 3 @ 12:42 - SCORE 91` (or `MARK NOT SAVED: LOG PAUSED`).
@@ -252,29 +260,36 @@ Virtual Pager → Download Loot.
 
 - **Single instance:** lock directory `/tmp/rf_buddy.lock` with the owner PID; a second
   launch shows "RF-BUDDY is already running." and exits without touching anything.
+- **Stock UI freeze/resume:** once the UI has drawn its first frame (ready file), `payload.sh`
+  sends SIGSTOP to the stock `pineapple` process so it stops drawing over the framebuffer and
+  reading buttons; the UI grabs `/dev/input/event0` exclusively. While frozen, the stock menu
+  and the stock Virtual Pager (`:1471`) are unavailable. Cleanup sends SIGCONT, and restarts
+  `/etc/init.d/pineapplepager` if `pineapple` is gone. B exits and resumes everything.
+- **Watchdog:** right after the freeze, a detached watchdog process waits for `payload.sh` to
+  die. If it is SIGKILLed, the watchdog stops the UI, resumes the stock UI, silences the
+  buzzer, runs `_pineap EXAMINE CANCEL`, and releases the lock. If the UI itself hangs while
+  `payload.sh` is alive, nothing resumes the Pager; the operator holds the power button.
 - **Cleanup** (`trap` on EXIT/INT/TERM/HUP and after the binary returns or crashes):
-  stop the tick loop and UI, `killall -INT hcitool` plus an LE scan-disable, `_pineap EXAMINE CANCEL`, remove the tick
-  file, release the lock. Idempotent.
+  stop the UI (TERM, KILL after 3 s), resume the stock UI, stop the watchdog, silence the
+  buzzer, `killall -INT hcitool` plus an LE scan-disable, `_pineap EXAMINE CANCEL`, release
+  the lock. Idempotent.
 - Overview tune failure → channel skipped after 3 consecutive failures (cleared every 20 cycles or when all are skipped); capture or channel-lock failure at probe → fatal screen.
 
 ## Deployment (`deploy.sh`)
 
-Run from the Mac with the Pager on USB (`root@172.16.52.1`, key-based SSH):
+Run from the Mac with the Pager on USB (`root@172.16.52.1`, key-based SSH). It installs
+**RF-BUDDY only**; no other payload is sent or touched.
 
 1. `./build.sh` (fresh `library/`).
-2. Copy `library/user/defcon/` to `/mmc/root/payloads/user/defcon/` (the previous folder is backed up, see step 3).
-3. Move the old `/mmc/root/payloads/user/general/DEFCON_DEFENSE` (and any previous `user/defcon`) to `/mmc/root/payload-backups/<timestamp>/` instead of removing it.
+2. Stream `library/user/defcon/RF-BUDDY` into a staging folder under
+   `/mmc/root/payloads/user/defcon/`.
+3. Move any previous `RF-BUDDY` to `/mmc/root/payload-backups/<timestamp>/RF-BUDDY` instead of
+   removing it, then swap the new one in (`rf-buddy-ui` mode 755).
 4. Register the category if missing: `uci add_list 'payloads.@directories[0].payloaddir=user/defcon'`
    and `uci commit payloads`.
 5. Print what changed. `--dry-run` prints the commands without running them.
 
 The Pager-side steps change device state, so the operator confirms before running it.
-
-## DEFCON-DEFENSE move
-
-Move `src/user/general/DEFCON_DEFENSE` → `src/user/defcon/DEFCON-DEFENSE` and update its
-`payload.sh` install-path resolution (`/root/payloads/user/defcon/DEFCON-DEFENSE`, with the
-`/mmc/...` fallback), `build.sh`, tests, and README. Behaviour is otherwise unchanged.
 
 ## Testing
 
@@ -285,17 +300,15 @@ Move `src/user/general/DEFCON_DEFENSE` → `src/user/defcon/DEFCON-DEFENSE` and 
   lock/peak/trend/inventory refresh with a fake radio; logger format/cap/pause; button
   state machine; tick mapping; render containment of stress states.
 - **Preview renders:** probe, overview 2.4/5 GHz, lock-on, no-Bluetooth, fatal, stress.
-- **Shell tests:** `payload.sh` lock/refusal/cleanup/tick fallback and a full run with a
-  fake UI; `deploy.sh --dry-run` command list with stubbed `ssh`; build/package include
-  both payloads under `user/defcon`; DEFCON-DEFENSE tests pass at the new path.
-- **On-device verification:** deploy, confirm the `defcon` category appears with both
-  payloads, run RF-BUDDY near a running microwave and confirm `INTERFERENCE`/high retry on
-  nearby 2.4 GHz channels, MARK, exit, confirm Recon hopping resumed and logs exist, and
-  confirm DEFCON-DEFENSE still launches.
+- **Shell tests:** `payload.sh` lock/refusal/cleanup, PATH export, stock-UI freeze/resume,
+  watchdog, and a full run with a fake UI; `deploy.sh --dry-run` command list with stubbed
+  `ssh` (RF-BUDDY only); build/package include RF-BUDDY under `user/defcon`.
+- **On-device verification:** deploy, confirm the `defcon` category appears with RF-BUDDY, run RF-BUDDY near a running microwave and confirm `INTERFERENCE`/high retry on
+  nearby 2.4 GHz channels, MARK, exit with B, confirm the stock menu and Virtual Pager are back, Recon hopping resumed, and logs exist.
 
 ## Out of scope
 
 - Floor-plan heat maps, zone tagging, or position estimation.
 - True spectrum analysis / busy % / noise floor (not available on this radio).
 - Changing AP configuration or transmitting anything.
-- Refactoring the DEFCON-DEFENSE UI.
+- Moving or refactoring DEFCON Defense (its relocation is that payload's own future work).

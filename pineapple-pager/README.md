@@ -9,7 +9,7 @@ a repeated same-offense**, stay quiet on ambient DEF CON noise.
 | Payload | Type | Warns you when… |
 |---|---|---|
 | `user/general/DEFCON_DEFENSE` | on-demand | runs a dedicated 480x222 full-screen Pager application with the designed general, threat-detail, and PCAP-evidence interfaces; it supplies live passive 2.4/5 GHz Recon, background trusted/watched-network correlation, bounded investigation capture, evidence verification, and later download through Virtual Pager |
-| `user/defcon/RF-BUDDY` | on-demand | separate full-screen 2.4/5 GHz interference finder: a live channel overview, a 1-second lock-on meter with tick, and a survey log, so you can walk an office and find where Wi-Fi and Bluetooth suffer and why (interference, congestion, overlap, Bluetooth density, weak coverage). Recon keeps running, locked to one channel at a time |
+| `user/defcon/RF-BUDDY` | on-demand | separate, standalone full-screen 2.4/5 GHz interference finder (also viewable at `http://172.16.52.1:1474`): a live channel overview, a 1-second lock-on meter with a buzzer tick, and a survey log, so you can walk an office and find where Wi-Fi and Bluetooth suffer and why (interference, congestion, overlap, Bluetooth density, weak coverage). Recon keeps running, locked to one channel at a time |
 | `alerts/deauth_flood_detected/defcon_sentry` | auto (custom) | the **same** attacker sustains a deauth/disassoc flood (3 hits/2 min, 5 min cooldown; watched MACs escalate instantly), then immediately starts a bounded passive PCAP when storage and concurrency guards allow |
 | `alerts/pineapple_client_connected/defcon_honeypot` | auto (custom) | a client joins **your decoy AP** (first sighting per client, dedup reconnects; flags randomized/private MACs — most modern phones use these, so it's expected, not alarming) |
 | `user/general/PORT_ALERT` | on-demand | someone port-scans the Pager (auto-hardens firewall 60s) |
@@ -39,8 +39,9 @@ PMKID attacks, handshake capture/crack, captive portals, PineAP karma/rogue-AP.
    `defcon` folder in the Payloads menu (`/etc/config/payloads`). Use
    `./deploy.sh --dry-run` to preview. A firmware update may reset the menu
    list; re-run `./deploy.sh` afterwards. To install over USB storage instead,
-   copy `library/*` into `/mmc/root/payloads/` and add
-   `list payloaddir 'user/defcon'` to `/etc/config/payloads`.
+   copy only `library/user/defcon/RF-BUDDY` into
+   `/mmc/root/payloads/user/defcon/` and add `list payloaddir 'user/defcon'` to
+   `/etc/config/payloads`. DEFCON Defense stays at `user/general/DEFCON_DEFENSE`.
 3. **Arm the auto-hooks:** make sure these directories have **no** `DISABLED.`
    prefix on the device (or enable them in the on-device **Alerts** menu):
    - `alerts/deauth_flood_detected/defcon_sentry`
@@ -79,16 +80,23 @@ PMKID attacks, handshake capture/crack, captive portals, PineAP karma/rogue-AP.
 
 ## Hunting office interference (RF-BUDDY)
 
-Both custom payloads live in their own **defcon** folder in the Payloads menu
-(`./deploy.sh` registers it — see Install). Open `RF-BUDDY`. The overview ranks
-every 2.4 GHz channel (UP/DOWN for 5 GHz) by interference score and names the
-likely cause. Select the worst channel and press A to lock on: the score updates
-every second and the tick speeds up as you get closer to the problem. Press A to
-MARK SPOT where it peaks, then match the numbered marks in
+RF-BUDDY is standalone and lives in its own **defcon** folder in the Payloads
+menu (`./deploy.sh` registers it; see Install). Open `RF-BUDDY`. The overview
+ranks every 2.4 GHz channel (UP/DOWN for 5 GHz) by interference score and names
+the likely cause. Select the worst channel and press A to lock on: the score
+updates every second and the buzzer tick speeds up as you get closer to the
+problem. Press A to MARK SPOT where it peaks, then match the numbered marks in
 `/root/loot/rf_buddy/<date-time>/marks.csv` to places in the office. Set
-`OFFICE_SSID` in its `payload.sh` to also flag weak coverage. The Pager's radio
+`OFFICE_SSID` in its `payload.sh` to also flag weak coverage; `TICK_FREQ_HZ` and
+`TICK_VOLUME` (0-255) set the tick's pitch and loudness. The Pager's radio
 cannot report busy time or noise floor, so RF-BUDDY scores channels from Wi-Fi
-airtime, retries, AP crowding, and Bluetooth density.
+airtime, retries, AP crowding, and Bluetooth density; the Bluetooth scan is
+passive.
+
+Open `http://172.16.52.1:1474` in a browser for a live copy of the screen with
+buttons. While RF-BUDDY runs, the stock Pager menu and the stock Virtual Pager
+(`:1471`) are paused; they come back when you press B. Recon keeps running,
+locked to one channel at a time.
 
 ## Tuning
 

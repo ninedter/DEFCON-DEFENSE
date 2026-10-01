@@ -31,7 +31,7 @@ airtime, retry %, AP count, frames per second, and the likely cause.
 
 **Lock-on** — the radio stays on one channel and updates once a second: big
 score, trend, peak, a 60-second graph, the strongest transmitters, and the
-nearby Bluetooth count. A tick plays faster as the score rises.
+nearby Bluetooth count. The buzzer tick plays faster as the score rises.
 
 | Button | Action |
 |---|---|
@@ -56,13 +56,25 @@ nearby Bluetooth count. A tick plays faster as the score rises.
 Edit the CONFIG block at the top of `payload.sh`:
 
 - `OFFICE_SSID` — your office network name. Enables `WEAK COVERAGE`.
-- `TICK_RINGTONE` — the lock-on tick. By default a short inline RTTTL beep; set
-  it to any ringtone name or RTTTL string. It is played with `RINGTONE` and
-  falls back to `VIBRATE` with the same pattern.
+- `TICK_FREQ_HZ` — pitch of the lock-on tick on the Pager buzzer (default 2000).
+- `TICK_VOLUME` — loudness of the tick, 0-255 (default 128).
 - Thresholds (`RETRY_HIGH_PCT`, `AIRTIME_HIGH_PCT`, …) are documented inline.
 
 Recon keeps running while RF-BUDDY is open; it is locked to one channel at a
-time and returns to normal hopping when you exit.
+time and returns to normal hopping when you exit. The Bluetooth scan is passive.
+
+## Viewer and the stock UI
+
+Open **http://172.16.52.1:1474** for RF-BUDDY's own viewer: a live copy of the
+screen with on-page buttons.
+
+While RF-BUDDY runs, the stock Pager menu and the stock Virtual Pager (`:1471`)
+are paused; they return when you press B.
+
+### If the Pager menu stays frozen
+
+RF-BUDDY's watchdog resumes the stock menu if RF-BUDDY is killed. If the
+RF-BUDDY app itself hangs, hold the power button to restart the Pager.
 
 ## Logs
 
@@ -73,4 +85,4 @@ Each run writes `/root/loot/rf_buddy/<date-time>/`:
 - `marks.csv` — your MARK SPOT markers.
 - `session.txt` — what the radio supported and the settings used.
 
-Retrieve them with Virtual Pager → **Download Loot**.
+Retrieve them with Virtual Pager → **Download Loot** (after RF-BUDDY has exited and the stock Virtual Pager is back).
