@@ -9,9 +9,9 @@ cleanup() { [ -d "$TMP" ] && rm -rf -- "$TMP"; }
 trap cleanup EXIT
 
 LIB="$TMP/library"
-mkdir -p "$LIB/user/defcon/RF-BUDDY" "$LIB/user/defcon/DEFCON-DEFENSE"
+mkdir -p "$LIB/user/defcon/RF-BUDDY"
 echo rf > "$LIB/user/defcon/RF-BUDDY/payload.sh"
-echo dd > "$LIB/user/defcon/DEFCON-DEFENSE/payload.sh"
+echo ui > "$LIB/user/defcon/RF-BUDDY/rf-buddy-ui"
 
 FAKE_SSH="$TMP/fake-ssh"
 cat > "$FAKE_SSH" <<'EOT'
@@ -35,8 +35,8 @@ printf '%s' "$out" | grep -qF "uci add_list 'payloads.@directories[0].payloaddir
 assert_rc "$?" "0" "dry run shows the category registration"
 printf '%s' "$out" | grep -qF 'payloads.@directories[0].payloaddir' && ! printf '%s' "$out" | grep -qF 'payloads.directories.payloaddir'
 assert_rc "$?" "0" "remote script uses the anonymous directories section"
-printf '%s' "$out" | grep -q 'general/DEFCON_DEFENSE'
-assert_rc "$?" "0" "dry run shows the old DEFCON_DEFENSE copy being handled"
+printf '%s' "$out" | grep -q 'DEFCON'
+assert_rc "$?" "1" "dry run output mentions no DEFCON payload"
 printf '%s' "$out" | grep -q 'payload-backups'
 assert_rc "$?" "0" "dry run shows the backup location"
 
@@ -47,16 +47,19 @@ grep -qx 'BatchMode=yes' "$FAKE_SSH_ARGS"; assert_rc "$?" "0" "never prompts for
 grep -q "uci commit payloads" "$FAKE_SSH_ARGS"; assert_rc "$?" "0" "remote script commits the category"
 mkdir -p "$TMP/unpacked"
 tar -xf "$FAKE_SSH_STDIN" -C "$TMP/unpacked"
-[ -f "$TMP/unpacked/RF-BUDDY/payload.sh" ] && [ -f "$TMP/unpacked/DEFCON-DEFENSE/payload.sh" ]
-assert_rc "$?" "0" "both payloads are streamed to the Pager"
+[ -f "$TMP/unpacked/payload.sh" ] && [ -f "$TMP/unpacked/rf-buddy-ui" ]
+assert_rc "$?" "0" "only RF-BUDDY contents are streamed to the Pager"
+grep -q 'DEFCON' "$FAKE_SSH_ARGS"; assert_rc "$?" "1" "remote script contains no DEFCON"
 
 PAGER_LIBRARY="$TMP/missing" PAGER_SSH="$FAKE_SSH" bash "$ROOT/deploy.sh" --skip-build >/dev/null 2>&1
-assert_rc "$?" "1" "deploy refuses a library without the defcon payloads"
+assert_rc "$?" "1" "deploy refuses a library without RF-BUDDY"
 
 # --- execute the remote script against a temp "Pager" ---------------------
 PR="$TMP/pager-root"; BR="$TMP/backups"; STUBS="$TMP/stubs"
-mkdir -p "$PR/user/general/DEFCON_DEFENSE" "$PR/user/defcon/RF-BUDDY" "$STUBS"
+mkdir -p "$PR/user/general/DEFCON_DEFENSE" "$PR/user/defcon/RF-BUDDY" "$PR/user/defcon/OTHER" "$STUBS"
 echo "mac" > "$PR/user/general/DEFCON_DEFENSE/trusted_aps.conf"
+echo "other" > "$PR/user/defcon/OTHER/payload.sh"
+cp -R "$PR/user/general/DEFCON_DEFENSE" "$TMP/dd-before"; cp -R "$PR/user/defcon/OTHER" "$TMP/other-before"
 echo "old" > "$PR/user/defcon/RF-BUDDY/payload.sh"
 : > "$TMP/uci-list"; : > "$TMP/uci-calls"
 cat > "$STUBS/uci" <<'EOT'
@@ -77,15 +80,17 @@ export UCI_LIST="$TMP/uci-list" UCI_CALLS="$TMP/uci-calls"
 FAKE_SSH_EXEC=1 PATH="$STUBS:$PATH" PAGER_PAYLOAD_ROOT="$PR" PAGER_BACKUP_ROOT="$BR" \
   PAGER_LIBRARY="$LIB" PAGER_SSH="$FAKE_SSH" bash "$ROOT/deploy.sh" --skip-build >/dev/null
 assert_rc "$?" "0" "deploy executes against a temp Pager root"
-[ -f "$PR/user/defcon/RF-BUDDY/payload.sh" ] && [ -f "$PR/user/defcon/DEFCON-DEFENSE/payload.sh" ]
-assert_rc "$?" "0" "new payloads are installed under user/defcon"
+[ -f "$PR/user/defcon/RF-BUDDY/payload.sh" ] && [ -x "$PR/user/defcon/RF-BUDDY/rf-buddy-ui" ]
+assert_rc "$?" "0" "RF-BUDDY is installed with an executable UI binary"
 assert_eq "$(cat "$PR/user/defcon/RF-BUDDY/payload.sh")" "rf" "RF-BUDDY is the new copy"
-[ ! -e "$PR/user/general/DEFCON_DEFENSE" ]; assert_rc "$?" "0" "old user/general/DEFCON_DEFENSE is gone"
-BKF="$(find "$BR" -name trusted_aps.conf | head -n 1)"
-[ -n "$BKF" ] && case "$BKF" in */general-DEFCON_DEFENSE/trusted_aps.conf) true ;; *) false ;; esac
-assert_rc "$?" "0" "old DEFCON_DEFENSE is backed up with trusted_aps.conf"
-BKP="$(find "$BR" -path '*/defcon/RF-BUDDY/payload.sh' | head -n 1)"
-[ -n "$BKP" ] && [ "$(cat "$BKP")" = "old" ]; assert_rc "$?" "0" "previous defcon folder is backed up"
+[ ! -e "$PR/user/defcon/RF-BUDDY.new" ]; assert_rc "$?" "0" "staging folder is gone"
+diff -r "$TMP/dd-before" "$PR/user/general/DEFCON_DEFENSE" >/dev/null
+assert_rc "$?" "0" "user/general/DEFCON_DEFENSE is untouched"
+diff -r "$TMP/other-before" "$PR/user/defcon/OTHER" >/dev/null
+assert_rc "$?" "0" "user/defcon/OTHER is untouched"
+BKP="$(find "$BR" -path '*/RF-BUDDY/payload.sh' | head -n 1)"
+[ -n "$BKP" ] && [ "$(cat "$BKP")" = "old" ]; assert_rc "$?" "0" "previous RF-BUDDY is backed up"
+[ "$(find "$BR" -type f | wc -l | tr -d ' ')" = "1" ]; assert_rc "$?" "0" "only RF-BUDDY was backed up"
 assert_eq "$(grep -c '^add_list' "$UCI_CALLS")" "1" "uci add_list called once"
 
 FAKE_SSH_EXEC=1 PATH="$STUBS:$PATH" PAGER_PAYLOAD_ROOT="$PR" PAGER_BACKUP_ROOT="$BR" \

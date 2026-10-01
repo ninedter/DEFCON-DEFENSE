@@ -1,5 +1,5 @@
 #!/bin/bash
-# Install the built payload tree on a USB-connected Pager over SSH and make
+# Install the RF-BUDDY payload (only) on a USB-connected Pager over SSH and make
 # sure the user/defcon category is listed in the Payloads menu.
 #
 #   ./deploy.sh              build, then deploy
@@ -27,42 +27,41 @@ done
 if [ "$SKIP_BUILD" != "1" ]; then
   OUT="$LIBRARY" bash "$HERE/build.sh"
 fi
-if [ ! -d "$LIBRARY/user/defcon/RF-BUDDY" ] || [ ! -d "$LIBRARY/user/defcon/DEFCON-DEFENSE" ]; then
-  echo "ERROR: $LIBRARY/user/defcon is missing RF-BUDDY or DEFCON-DEFENSE; run ./build.sh" >&2
+SRC="$LIBRARY/user/defcon/RF-BUDDY"
+if [ ! -d "$SRC" ] || [ ! -e "$SRC/rf-buddy-ui" ]; then
+  echo "ERROR: $SRC is missing or has no rf-buddy-ui; run ./build.sh" >&2
   exit 1
 fi
 
-# Runs on the Pager. Extracts to a staging folder, moves any previous defcon
-# folder and the pre-move DEFCON_DEFENSE copy into a timestamped backup (never
-# deleting them), swaps the new tree in, and registers the menu category.
+# Runs on the Pager. Extracts RF-BUDDY to a staging folder, moves any previous
+# RF-BUDDY into a timestamped backup (never deleting it), swaps the new one in,
+# and registers the menu category. Touches no other payload.
 REMOTE_SCRIPT="set -e
-cd '$REMOTE_ROOT/user'
+mkdir -p '$REMOTE_ROOT/user/defcon'
+cd '$REMOTE_ROOT/user/defcon'
 TS=\$(date +%Y%m%d-%H%M%S)
 BK='$BACKUP_ROOT'/\$TS
-BACKED_UP=0
-rm -rf defcon.new && mkdir defcon.new
-tar -C defcon.new -xf -
-if [ -d defcon ]; then mkdir -p \"\$BK\"; mv defcon \"\$BK/defcon\"; BACKED_UP=1; fi
-mv defcon.new defcon
-chmod 755 defcon/DEFCON-DEFENSE/defcon-ui defcon/RF-BUDDY/rf-buddy-ui 2>/dev/null || true
-if [ -d general/DEFCON_DEFENSE ]; then
-  mkdir -p \"\$BK\"; mv general/DEFCON_DEFENSE \"\$BK/general-DEFCON_DEFENSE\"; BACKED_UP=1
-  echo \"moved old user/general/DEFCON_DEFENSE to \$BK\"
+rm -rf RF-BUDDY.new && mkdir RF-BUDDY.new
+tar -C RF-BUDDY.new -xf -
+if [ -d RF-BUDDY ]; then
+  mkdir -p \"\$BK\"; mv RF-BUDDY \"\$BK/RF-BUDDY\"
+  echo \"backup: \$BK/RF-BUDDY\"
 fi
-if [ \"\$BACKED_UP\" = 1 ]; then echo \"backup: \$BK\"; fi
+mv RF-BUDDY.new RF-BUDDY
+chmod 755 RF-BUDDY/rf-buddy-ui
 if ! uci -q get 'payloads.@directories[0].payloaddir' | tr ' ' '\n' | grep -qx 'user/defcon'; then
   uci add_list 'payloads.@directories[0].payloaddir=user/defcon'
   uci commit payloads
   echo 'registered user/defcon in the Payloads menu'
 fi
-echo \"deployed: \$(ls defcon | tr '\n' ' ')\"
+echo 'deployed: RF-BUDDY'
 echo 'If the defcon folder does not appear in Payloads, reboot the Pager.'"
 
 if [ "$DRY_RUN" = "1" ]; then
-  echo "DRY RUN: would stream $LIBRARY/user/defcon to $PAGER_HOST:$REMOTE_ROOT/user/defcon and run:"
+  echo "DRY RUN: would stream $SRC to $PAGER_HOST:$REMOTE_ROOT/user/defcon/RF-BUDDY and run:"
   printf '%s\n' "$REMOTE_SCRIPT"
   exit 0
 fi
 
-COPYFILE_DISABLE=1 tar --no-xattrs --no-mac-metadata -C "$LIBRARY/user/defcon" -cf - . \
+COPYFILE_DISABLE=1 tar --no-xattrs --no-mac-metadata -C "$SRC" -cf - . \
   | "$SSH" -o BatchMode=yes -o ConnectTimeout=5 "$PAGER_HOST" "$REMOTE_SCRIPT"

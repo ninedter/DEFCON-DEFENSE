@@ -33,9 +33,9 @@ PMKID attacks, handshake capture/crack, captive portals, PineAP karma/rogue-AP.
    For a Pager-ready archive with macOS metadata stripped, run `./package.sh`;
    it writes the archive and checksum manifest under `pineapple-pager/dist/`.
 2. With the Pager on USB, run `./deploy.sh` (key-based SSH to `root@172.16.52.1`).
-   It installs DEFCON-DEFENSE and RF-BUDDY into `/root/payloads/user/defcon/`,
-   moves the old `user/general/DEFCON_DEFENSE` copy and any previous `defcon`
-   folder to `/mmc/root/payload-backups/<timestamp>/`, and registers the
+   It installs RF-BUDDY only, into `/root/payloads/user/defcon/RF-BUDDY/`; no
+   other payload is sent or touched. Any previous RF-BUDDY is moved to
+   `/mmc/root/payload-backups/<timestamp>/RF-BUDDY`, and the script registers the
    `defcon` folder in the Payloads menu (`/etc/config/payloads`). Use
    `./deploy.sh --dry-run` to preview. A firmware update may reset the menu
    list; re-run `./deploy.sh` afterwards. To install over USB storage instead,
