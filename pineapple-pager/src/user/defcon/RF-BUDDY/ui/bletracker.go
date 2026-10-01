@@ -28,6 +28,11 @@ type BLEDevice struct {
 	Brand      string
 	Type       string
 	Appearance string
+	Model      string   // decoded model, e.g. "AIRPODS PRO 2", "" when unknown
+	AddrKind   string   // PUBLIC, STATIC, PRIVATE or NON-RESOLV
+	MakerFull  string   // fuller maker name (company / member / OUI), "" when unknown
+	BeaconInfo string   // e.g. "IBEACON 1234/5678", "EDDYSTONE URL"
+	Services   []string // SIG names of advertised 16-bit services, at most 3
 	FirstSeen  time.Time
 	Name       string
 	RSSI       int
@@ -56,10 +61,16 @@ type bleEntry struct {
 	addr     string
 	random   bool
 	company  int
-	kind     string
+	mfrKind  string
+	svcKind  string
 	hint     string
-	appear   string
+	appearV  int // GAP appearance value, -1 when never seen
+	services []int
+	model    string
+	beacon   string
 	name     string
+	cls      bleClass // identification, recomputed only when an input changes
+	gen      int      // bumped on every input change; guards async classification
 	lastRSSI int
 	peak     int
 	tx       int
@@ -92,7 +103,7 @@ func (t *BLETracker) entry(addr string, at time.Time) *bleEntry {
 		if len(t.devs) >= bleMaxDevices {
 			t.evictOldestLocked()
 		}
-		e = &bleEntry{addr: addr, company: -1, lastRSSI: bleNoSignal, peak: bleNoSignal, first: at}
+		e = &bleEntry{addr: addr, company: -1, appearV: -1, lastRSSI: bleNoSignal, peak: bleNoSignal, first: at}
 		t.devs[addr] = e
 	}
 	if at.After(e.last) {
@@ -117,25 +128,63 @@ func (t *BLETracker) evictOldestLocked() {
 	}
 }
 
+// fullClassify is the database-backed classifier; a variable so tests can
+// make it slow and prove readers are not blocked.
+var fullClassify = func(in bleClassIn) bleClass { return classifyBLE(in, true) }
+
+// Observe records one decoded advert. Identification (which may need the
+// embedded OUI database, loaded lazily) runs only when an identifying input
+// changed and always outside the tracker lock, so a slow first load can never
+// stall readers such as the render loop.
 func (t *BLETracker) Observe(a Advert, at time.Time) {
+	e, in, gen, changed := t.observe(a, at)
+	if !changed {
+		return
+	}
+	cls := fullClassify(in)
+	t.mu.Lock()
+	if t.devs[a.Addr] == e && e.gen == gen {
+		e.cls = cls
+	}
+	t.mu.Unlock()
+}
+
+func (t *BLETracker) observe(a Advert, at time.Time) (e *bleEntry, in bleClassIn, gen int, changed bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	e := t.entry(a.Addr, at)
-	e.random = a.Random
-	if a.Name != "" {
-		e.name = a.Name
+	e = t.entry(a.Addr, at)
+	changed = !e.cls.valid
+	set := func(dst *string, v string) {
+		if v != "" && *dst != v {
+			*dst, changed = v, true
+		}
 	}
-	if a.Company >= 0 {
-		e.company = a.Company
+	if e.random != a.Random {
+		e.random, changed = a.Random, true
 	}
-	if a.Kind != "" {
-		e.kind = a.Kind
+	set(&e.name, a.Name)
+	if a.Company >= 0 && e.company != a.Company {
+		e.company, changed = a.Company, true
 	}
-	if a.BrandHint != "" {
-		e.hint = a.BrandHint
+	set(&e.mfrKind, a.MfrKind)
+	set(&e.svcKind, a.SvcKind)
+	set(&e.hint, a.BrandHint)
+	set(&e.model, a.Model)
+	set(&e.beacon, a.BeaconInfo)
+	if a.Appearance >= 0 && e.appearV != a.Appearance {
+		e.appearV, changed = a.Appearance, true
 	}
-	if ap := AppearanceType(a.Appearance); ap != "" {
-		e.appear = ap
+	for _, u := range a.ServiceUUIDs {
+		if len(e.services) >= advMaxServices {
+			break
+		}
+		seen := false
+		for _, v := range e.services {
+			seen = seen || v == u
+		}
+		if !seen {
+			e.services, changed = append(e.services, u), true
+		}
 	}
 	if a.HasTx {
 		e.tx, e.hasTx = a.TxPower, true
@@ -155,6 +204,13 @@ func (t *BLETracker) Observe(a Advert, at time.Time) {
 			t.tPeak, t.tPeakAt = a.RSSI, at
 		}
 	}
+	if changed {
+		e.gen++
+		in = e.classIn()
+		// Provisional, database-free answer until the full one is stored.
+		e.cls = classifyBLE(in, false)
+	}
+	return e, in, e.gen, changed
 }
 
 // ObserveAddr records presence only (no RSSI) for hcitool-only fallback.
@@ -239,28 +295,23 @@ func (e *bleEntry) device(now time.Time) BLEDevice {
 	if span < 1 {
 		span = 1
 	}
+	c := e.cls
+	if !c.valid {
+		c = bleClass{brand: "UNKNOWN", typ: "OTHER"}
+	}
 	d := BLEDevice{
-		Addr: e.addr, Random: e.random, Maker: CompanyName(e.company), Kind: e.kind,
+		Addr: e.addr, Random: e.random, Kind: c.typ, Brand: c.brand, Type: c.typ,
 		Name: e.name, RSSI: rssi, Peak: e.peak, AdvPerSec: float64(cnt) / span,
 		TxPower: e.tx, HasTx: e.hasTx, LastSeen: e.last,
-		Appearance: e.appear, FirstSeen: e.first,
+		Appearance: c.appear, FirstSeen: e.first,
+		Model: e.model, AddrKind: c.addrKind, MakerFull: c.makerFull,
+		BeaconInfo: e.beacon, Services: c.services,
 	}
-	d.Brand = bleBrand(d, e.hint)
-	d.Type = bleType(d)
+	if c.brand != "UNKNOWN" {
+		d.Maker = c.brand
+	}
 	d.Label = bleLabel(d)
 	return d
-}
-
-// bleBrand picks the best brand name: maker, service hint, first word of
-// the name, else UNKNOWN.
-func bleBrand(d BLEDevice, hint string) string {
-	switch {
-	case d.Maker != "":
-		return d.Maker
-	case hint != "":
-		return hint
-	}
-	return nameWord(d.Name)
 }
 
 // nameWord returns the first word of name trimmed to letters/digits at both
@@ -295,19 +346,12 @@ func nameWord(name string) string {
 	return w
 }
 
-func bleType(d BLEDevice) string {
-	switch {
-	case d.Kind != "":
-		return d.Kind
-	case d.Appearance != "":
-		return d.Appearance
-	}
-	return "OTHER"
-}
-
 func bleLabel(d BLEDevice) string {
 	if d.Name != "" {
 		return d.Name
+	}
+	if d.Model != "" {
+		return d.Model
 	}
 	brand, typ := d.Brand, d.Type
 	if brand == "" {
@@ -368,7 +412,7 @@ func (t *BLETracker) Tracked(now time.Time) *BLETrackView {
 	t.expireLocked(now)
 	e := t.devs[t.tracked]
 	if e == nil {
-		e = &bleEntry{addr: t.tracked, company: -1, lastRSSI: bleNoSignal, peak: bleNoSignal}
+		e = &bleEntry{addr: t.tracked, company: -1, appearV: -1, lastRSSI: bleNoSignal, peak: bleNoSignal}
 	}
 	v := &BLETrackView{BLEDevice: e.device(now), PeakAt: t.tPeakAt}
 	v.Peak = t.tPeak

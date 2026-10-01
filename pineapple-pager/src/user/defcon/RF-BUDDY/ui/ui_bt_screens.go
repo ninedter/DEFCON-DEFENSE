@@ -168,6 +168,21 @@ func wrapParts(s string, width, maxLines int) []string {
 	return lines
 }
 
+// topServices lists the SIG services advertised by the strongest device of
+// the list that advertises any.
+func topServices(devs []BLEDevice) string {
+	best := -1
+	for i, d := range devs {
+		if len(d.Services) > 0 && (best < 0 || d.RSSI > devs[best].RSSI) {
+			best = i
+		}
+	}
+	if best < 0 {
+		return ""
+	}
+	return strings.Join(devs[best].Services, ", ")
+}
+
 // renderBTGroupPanel draws the summary of a brand (types=false) or of one
 // type of a brand (types=true).
 func renderBTGroupPanel(img *image.RGBA, s Snapshot, brand string, g BTGroup, types bool) {
@@ -186,12 +201,59 @@ func renderBTGroupPanel(img *image.RGBA, s Snapshot, brand string, g BTGroup, ty
 		if h := btTypeHints[g.Name]; h != "" {
 			drawTextBox(img, box, 266, 136, trimCells(h, btPanelCells), dim, true, 1)
 		}
+		if svc := topServices(DevicesOf(s.BT, brand, g.Name)); svc != "" {
+			drawText(img, 266, 156, "SERVICES", white, true, 1)
+			drawTextBox(img, box, 266, 172, trimCells(svc, btPanelCells), cyan, true, 1)
+		}
 		return
 	}
 	drawText(img, 266, 136, "TYPES", white, true, 1)
 	for i, l := range wrapParts(TypeBreakdown(s.BT, g.Name, 8), btPanelCells, 2) {
 		drawTextBox(img, box, 266, 152+i*16, trimCells(l, btPanelCells), cyan, true, 1)
 	}
+}
+
+// btMakerText is the MAKER row: the brand, the fuller maker name when the
+// brand is only a bare "ID XXXX", and "--" when the maker is unknown.
+func btMakerText(d BLEDevice) string {
+	b := d.Brand
+	if strings.HasPrefix(b, "ID ") && strings.TrimSpace(d.MakerFull) != "" {
+		return strings.TrimSpace(d.MakerFull)
+	}
+	if b == "" || b == "UNKNOWN" {
+		return "--"
+	}
+	return b
+}
+
+// btKindText is the KIND row: the decoded model when known, else the type
+// ("OTHER" shows as "--").
+func btKindText(d BLEDevice) string {
+	if d.Model != "" {
+		return d.Model
+	}
+	if d.Type == "" || d.Type == "OTHER" {
+		return "--"
+	}
+	return d.Type
+}
+
+// btSignalText is "-64 (PK -61)"; each part is "--" without a reading.
+func btSignalText(d BLEDevice) string {
+	return fmt.Sprintf("%s (PK %s)", fmtRSSI(d.RSSI), fmtRSSI(d.Peak))
+}
+
+// btSeenText is "0S / 04:08:25": seconds since the last advert and the
+// first-seen clock; "--" for a time that was never recorded.
+func btSeenText(d BLEDevice, now time.Time) string {
+	ago, first := "--", "--"
+	if !d.LastSeen.IsZero() {
+		ago = fmt.Sprintf("%dS", secondsAgo(d.LastSeen, now))
+	}
+	if !d.FirstSeen.IsZero() {
+		first = d.FirstSeen.Format("15:04:05")
+	}
+	return ago + " / " + first
 }
 
 func renderBTPanel(img *image.RGBA, d BLEDevice, now time.Time) {
@@ -201,11 +263,14 @@ func renderBTPanel(img *image.RGBA, d BLEDevice, now time.Time) {
 	if len(addr) > 3 {
 		addr = addr[3:]
 	}
-	kind := "PUBLIC"
-	if d.Random {
-		kind = "RANDOM"
+	kind := d.AddrKind
+	if kind == "" {
+		kind = "--"
 	}
 	name := d.Name
+	if name == "" {
+		name = d.BeaconInfo
+	}
 	if name == "" {
 		name = "--"
 	}
@@ -213,17 +278,13 @@ func renderBTPanel(img *image.RGBA, d BLEDevice, now time.Time) {
 	if d.HasTx {
 		tx = fmt.Sprintf("%d DBM", d.TxPower)
 	}
-	first := "--"
-	if !d.FirstSeen.IsZero() {
-		first = d.FirstSeen.Format("15:04:05")
-	}
 	metricRow(img, 44, "ADDR", addr, cyan)
-	metricRow(img, 60, "TYPE", kind, cyan)
-	metricRow(img, 76, "NAME", name, cyan)
-	metricRow(img, 92, "SIGNAL", fmtDBM(d.RSSI), signalColor(d.RSSI))
-	metricRow(img, 108, "PEAK", fmtDBM(d.Peak), cyan)
-	metricRow(img, 124, "ADV/S", fmt.Sprintf("%.1f", d.AdvPerSec), cyan)
-	metricRow(img, 140, "TX PWR", tx, cyan)
-	metricRow(img, 156, "SEEN", fmt.Sprintf("%d S AGO", secondsAgo(d.LastSeen, now)), cyan)
-	metricRow(img, 172, "FIRST", first, cyan)
+	metricRow(img, 60, "ADDR TYPE", kind, cyan)
+	metricRow(img, 76, "MAKER", btMakerText(d), cyan)
+	metricRow(img, 92, "KIND", btKindText(d), cyan)
+	metricRow(img, 108, "NAME", name, cyan)
+	metricRow(img, 124, "SIGNAL", btSignalText(d), signalColor(d.RSSI))
+	metricRow(img, 140, "ADV/S", fmt.Sprintf("%.1f", d.AdvPerSec), cyan)
+	metricRow(img, 156, "TX PWR", tx, cyan)
+	metricRow(img, 172, "SEEN", btSeenText(d, now), cyan)
 }

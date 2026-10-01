@@ -47,7 +47,7 @@ func TestBLELabel(t *testing.T) {
 
 func TestTrackerDevices(t *testing.T) {
 	tr := NewBLETracker(30 * time.Second)
-	a := Advert{Addr: "AA", Random: true, RSSI: -80, Company: 0x4C, Kind: "AIRPODS", Name: "BUDS", HasTx: true, TxPower: 4}
+	a := Advert{Addr: "AA", Random: true, RSSI: -80, Company: 0x4C, MfrKind: "AIRPODS", Name: "BUDS", HasTx: true, TxPower: 4}
 	tr.Observe(a, t0)
 	a.Name, a.RSSI = "", -60 // sticky name
 	tr.Observe(a, t0.Add(time.Second))
@@ -208,14 +208,14 @@ func TestBrandAndTypeDerivation(t *testing.T) {
 		brand, typ string
 		label      string
 	}{
-		{"company", Advert{Addr: "AA:BB:CC:DD:EE:01", Company: 0x4C, Kind: "FIND MY", Appearance: -1}, "APPLE", "FIND MY", "APPLE FIND MY"},
+		{"company", Advert{Addr: "AA:BB:CC:DD:EE:01", Company: 0x4C, MfrKind: "FIND MY", Appearance: -1}, "APPLE", "FIND MY", "APPLE FIND MY"},
 		{"unknown id", Advert{Addr: "AA:BB:CC:DD:EE:02", Company: 0xB5B5, Appearance: -1}, "ID B5B5", "OTHER", "ID B5B5 DEVICE"},
-		{"hint", Advert{Addr: "AA:BB:CC:DD:EE:03", Company: -1, BrandHint: "TILE", Kind: "TRACKER", Appearance: -1}, "TILE", "TRACKER", "TILE TRACKER"},
-		{"name word", Advert{Addr: "AA:BB:CC:DD:EE:04", Company: -1, Appearance: -1, Name: "NANOLEAF STRIP FCE"}, "NANOLEAF", "OTHER", "NANOLEAF STRIP FCE"},
-		{"name punct", Advert{Addr: "AA:BB:CC:DD:EE:05", Company: -1, Appearance: -1, Name: "[BOSE-QC] 35"}, "BOSE-QC", "OTHER", "[BOSE-QC] 35"},
+		{"hint", Advert{Addr: "AA:BB:CC:DD:EE:03", Company: -1, BrandHint: "TILE", SvcKind: "TRACKER", Appearance: -1}, "TILE", "TRACKER", "TILE TRACKER"},
+		{"name word", Advert{Addr: "AA:BB:CC:DD:EE:04", Company: -1, Appearance: -1, Name: "NANOLEAF STRIP FCE"}, "NANOLEAF", "LIGHT", "NANOLEAF STRIP FCE"},
+		{"name punct", Advert{Addr: "AA:BB:CC:DD:EE:05", Company: -1, Appearance: -1, Name: "[ZEBRA-QC] 35"}, "ZEBRA-QC", "OTHER", "[ZEBRA-QC] 35"},
 		{"digit name", Advert{Addr: "AA:BB:CC:DD:EE:06", Company: -1, Appearance: -1, Name: "1234 5"}, "UNKNOWN", "OTHER", "1234 5"},
 		{"unknown", Advert{Addr: "AA:BB:CC:DD:EE:07", Company: -1, Appearance: -1}, "UNKNOWN", "OTHER", "UNKNOWN AA:BB:CC"},
-		{"appearance type", Advert{Addr: "AA:BB:CC:DD:EE:08", Company: 0x75, Appearance: 0x03C1, Kind: "KEYBOARD"}, "SAMSUNG", "KEYBOARD", "SAMSUNG KEYBOARD"},
+		{"appearance type", Advert{Addr: "AA:BB:CC:DD:EE:08", Company: 0x75, Appearance: 0x03C1}, "SAMSUNG", "KEYBOARD", "SAMSUNG KEYBOARD"},
 	}
 	for _, tc := range tests {
 		tr := NewBLETracker(time.Minute)

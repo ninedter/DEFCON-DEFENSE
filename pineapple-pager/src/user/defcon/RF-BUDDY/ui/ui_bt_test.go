@@ -317,3 +317,36 @@ func TestBTRowText(t *testing.T) {
 		t.Fatalf("anonymous row = %q", got)
 	}
 }
+
+func TestBTPanelTexts(t *testing.T) {
+	now := time.Date(2026, 10, 1, 12, 42, 0, 0, time.Local)
+	for _, tc := range []struct {
+		d                BLEDevice
+		maker, kind, sig string
+	}{
+		{BLEDevice{Brand: "APPLE", Type: "AIRPODS", Model: "AIRPODS PRO 2", RSSI: -64, Peak: -61}, "APPLE", "AIRPODS PRO 2", "-64 (PK -61)"},
+		{BLEDevice{Brand: "ID B5B5", MakerFull: " B5 LABS ", Type: "OTHER", RSSI: -100, Peak: -100}, "B5 LABS", "--", "-- (PK --)"},
+		{BLEDevice{Brand: "ID B5B5", Type: "TV", RSSI: -70, Peak: -100}, "ID B5B5", "TV", "-70 (PK --)"},
+		{BLEDevice{Brand: "UNKNOWN", Type: "OTHER", RSSI: -50, Peak: -50}, "--", "--", "-50 (PK -50)"},
+	} {
+		if g := btMakerText(tc.d); g != tc.maker {
+			t.Errorf("maker %q want %q", g, tc.maker)
+		}
+		if g := btKindText(tc.d); g != tc.kind {
+			t.Errorf("kind %q want %q", g, tc.kind)
+		}
+		if g := btSignalText(tc.d); g != tc.sig {
+			t.Errorf("signal %q want %q", g, tc.sig)
+		}
+	}
+	d := BLEDevice{LastSeen: now, FirstSeen: time.Date(2026, 10, 1, 4, 8, 25, 0, time.Local)}
+	if g := btSeenText(d, now); g != "0S / 04:08:25" {
+		t.Errorf("seen %q", g)
+	}
+	if g := btSeenText(BLEDevice{}, now); g != "-- / --" {
+		t.Errorf("seen %q", g)
+	}
+	if got := topServices([]BLEDevice{{RSSI: -40}, {RSSI: -70, Services: []string{"HEART RATE"}}, {RSSI: -80, Services: []string{"HID"}}}); got != "HEART RATE" {
+		t.Errorf("topServices %q", got)
+	}
+}

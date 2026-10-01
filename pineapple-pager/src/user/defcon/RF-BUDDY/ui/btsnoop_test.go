@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"encoding/hex"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -56,16 +57,16 @@ func TestParseLEAdvertEvent(t *testing.T) {
 		pkt  []byte
 		want []Advert
 	}{
-		{"real A", hx(t, realA), []Advert{{Addr: "02:68:EB:EC:8C:6E", RSSI: -77, Company: -1, Appearance: -1}}},
+		{"real A", hx(t, realA), []Advert{{Addr: "02:68:EB:EC:8C:6E", RSSI: -77, Company: -1, Appearance: -1, ServiceUUIDs: []int{0xFDF7}}}},
 		{"real B", hx(t, realB), []Advert{{Addr: "74:4D:BD:CD:0F:C5", RSSI: -90, Company: 0xB5B5, Appearance: -1}}},
 		{"name+tx", legacyEvt(legacy(a1, 0, nano, -60)),
 			[]Advert{{Addr: "01:02:03:04:05:06", RSSI: -60, Name: "NANOLEAF STRIP FCE", TxPower: 12, HasTx: true, Company: -1, Appearance: -1}}},
 		{"airpods", legacyEvt(legacy(a1, 0, apple, -50)),
-			[]Advert{{Addr: "01:02:03:04:05:06", RSSI: -50, Company: 0x4C, Appearance: -1, Kind: "AIRPODS"}}},
+			[]Advert{{Addr: "01:02:03:04:05:06", RSSI: -50, Company: 0x4C, Appearance: -1, Kind: "AIRPODS", MfrKind: "AIRPODS"}}},
 		{"swift pair", legacyEvt(legacy(a1, 0, msft, -50)),
-			[]Advert{{Addr: "01:02:03:04:05:06", RSSI: -50, Company: 6, Appearance: -1, Kind: "SWIFT PAIR"}}},
+			[]Advert{{Addr: "01:02:03:04:05:06", RSSI: -50, Company: 6, Appearance: -1, Kind: "SWIFT PAIR", MfrKind: "SWIFT PAIR"}}},
 		{"fast pair", legacyEvt(legacy(a1, 0, fast, -50)),
-			[]Advert{{Addr: "01:02:03:04:05:06", RSSI: -50, Company: -1, Appearance: -1, Kind: "FAST PAIR", BrandHint: "GOOGLE"}}},
+			[]Advert{{Addr: "01:02:03:04:05:06", RSSI: -50, Company: -1, Appearance: -1, Kind: "FAST PAIR", SvcKind: "FAST PAIR", BrandHint: "GOOGLE", ServiceUUIDs: []int{0xFE2C}}}},
 		{"non-ascii name", legacyEvt(legacy(a1, 1, odd, -50)),
 			[]Advert{{Addr: "01:02:03:04:05:06", Random: true, RSSI: -50, Name: "CAF", Company: -1, Appearance: -1}}},
 		{"two reports", legacyEvt(legacy(a1, 0, nil, -40), legacy(a2, 1, nil, -41)),
@@ -79,7 +80,7 @@ func TestParseLEAdvertEvent(t *testing.T) {
 				t.Fatalf("got %+v", got)
 			}
 			for i := range got {
-				if got[i] != tc.want[i] {
+				if !reflect.DeepEqual(got[i], tc.want[i]) {
 					t.Errorf("[%d] got %+v want %+v", i, got[i], tc.want[i])
 				}
 			}
@@ -102,7 +103,7 @@ func TestParseExtended(t *testing.T) {
 	ad := append([]byte{0x05, 0x09}, []byte("Ext1")...)
 	got := ParseLEAdvertEvent(extEvt([6]byte{1, 2, 3, 4, 5, 6}, ad, -70))
 	want := Advert{Addr: "01:02:03:04:05:06", Random: true, RSSI: -70, Name: "EXT1", Company: -1, Appearance: -1}
-	if len(got) != 1 || got[0] != want {
+	if len(got) != 1 || !reflect.DeepEqual(got[0], want) {
 		t.Fatalf("got %+v want %+v", got, want)
 	}
 }

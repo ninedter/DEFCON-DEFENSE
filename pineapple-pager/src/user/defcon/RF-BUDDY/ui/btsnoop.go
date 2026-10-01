@@ -17,11 +17,19 @@ type Advert struct {
 	Name       string
 	TxPower    int
 	HasTx      bool
-	Company    int // -1 when absent
-	Kind       string
-	Appearance int // GAP appearance value, -1 when absent
+	Company    int    // -1 when absent
+	Kind       string // legacy single kind: mfr > service > appearance
+	Appearance int    // GAP appearance value, -1 when absent
 	BrandHint  string
+
+	MfrKind      string // kind from manufacturer data (Apple / Microsoft)
+	SvcKind      string // kind from advertised services
+	ServiceUUIDs []int  // 16-bit service UUIDs (AD 0x02/0x03 and service data), max advMaxServices
+	Model        string // decoded device model, e.g. "AIRPODS PRO 2"
+	BeaconInfo   string // e.g. "IBEACON 1234/5678", "EDDYSTONE URL"
 }
+
+const advMaxServices = 8
 
 const (
 	btsnoopHdrLen    = 16
@@ -152,8 +160,17 @@ func parseAD(ad []byte, a *Advert) {
 	a.Appearance = -1
 	short, mfr, svc := "", "", ""
 	fastPair := false
-	service := func(uuid int) {
+	service := func(uuid int, data []byte) {
 		kind, hint := "", ""
+		if len(a.ServiceUUIDs) < advMaxServices {
+			dup := false
+			for _, u := range a.ServiceUUIDs {
+				dup = dup || u == uuid
+			}
+			if !dup {
+				a.ServiceUUIDs = append(a.ServiceUUIDs, uuid)
+			}
+		}
 		switch uuid {
 		case 0xFEED, 0xFEEC:
 			kind, hint = "TRACKER", "TILE"
@@ -161,12 +178,19 @@ func parseAD(ad []byte, a *Advert) {
 			kind, hint = "SMARTTAG", "SAMSUNG"
 		case 0xFEAA:
 			kind = "EDDYSTONE"
+			if len(data) >= 1 && a.BeaconInfo == "" {
+				if f := eddystoneFrame(data[0]); f != "" {
+					a.BeaconInfo = "EDDYSTONE " + f
+				}
+			}
 		case 0xFE2C:
 			kind, fastPair = "FAST PAIR", true
 		case 0xFD6F:
 			kind = "EXPOSURE NOTIF"
 		case 0xFE9F:
 			hint = "GOOGLE"
+		default:
+			kind = serviceKind(uuid)
 		}
 		if kind != "" && svc == "" {
 			svc = kind
@@ -198,17 +222,23 @@ func parseAD(ad []byte, a *Advert) {
 		case 0xFF:
 			if len(d) >= 2 {
 				a.Company = int(d[0]) | int(d[1])<<8
-				if k := mfrKind(a.Company, d[2:]); k != "" && mfr == "" {
+				if k, m, b := mfrInfo(a.Company, d[2:]); mfr == "" && k != "" {
 					mfr = k
+					if a.Model == "" {
+						a.Model = m
+					}
+					if a.BeaconInfo == "" {
+						a.BeaconInfo = b
+					}
 				}
 			}
 		case 0x16:
 			if len(d) >= 2 {
-				service(int(d[0]) | int(d[1])<<8)
+				service(int(d[0])|int(d[1])<<8, d[2:])
 			}
 		case 0x02, 0x03:
 			for i := 0; i+1 < len(d); i += 2 {
-				service(int(d[i]) | int(d[i+1])<<8)
+				service(int(d[i])|int(d[i+1])<<8, nil)
 			}
 		}
 	}
@@ -218,6 +248,7 @@ func parseAD(ad []byte, a *Advert) {
 	if fastPair && a.Company < 0 && a.BrandHint == "" {
 		a.BrandHint = "GOOGLE"
 	}
+	a.MfrKind, a.SvcKind = mfr, svc
 	switch {
 	case mfr != "":
 		a.Kind = mfr
@@ -276,10 +307,36 @@ var appleKinds = []struct {
 	{0x0F, "NEARBY ACTION"}, {0x10, "NEARBY"},
 }
 
-// appleKind walks the [type][len][data] TLVs and returns the most specific
-// kind. A TLV whose length overruns the buffer still counts by its type.
-func appleKind(d []byte) string {
+// serviceKind names the kind implied by a standard SIG service UUID, or "".
+// The battery service alone says nothing and is ignored.
+func serviceKind(uuid int) string {
+	switch uuid {
+	case 0x180D:
+		return "HEART RATE"
+	case 0x1812:
+		return "HID"
+	case 0x184E, 0x184F, 0x1850, 0x1853, 0x1855, 0x1856:
+		return "LE AUDIO"
+	case 0x181C, 0x181D:
+		return "SCALE"
+	case 0x1816:
+		return "CYCLING"
+	case 0x1814:
+		return "RUNNING"
+	case 0x1809:
+		return "THERMOMETER"
+	case 0x1808:
+		return "GLUCOSE"
+	}
+	return ""
+}
+
+// appleInfo walks the [type][len][data] TLVs and returns the most specific
+// kind, plus the proximity-pairing model and iBeacon info when a complete TLV
+// carries them. A TLV whose length overruns the buffer still counts by its type.
+func appleInfo(d []byte) (kind, model, beacon string) {
 	best := len(appleKinds)
+	beats := false
 	for len(d) >= 2 {
 		for i := 0; i < best; i++ {
 			if appleKinds[i].typ == d[0] {
@@ -291,31 +348,44 @@ func appleKind(d []byte) string {
 		if len(d) < 2+l {
 			break
 		}
+		switch {
+		case d[0] == 0x07 && l >= 3 && model == "":
+			if m, ok := appleModels[uint16(d[3])<<8|uint16(d[4])]; ok {
+				model, beats = m.name, m.beats
+			}
+		case d[0] == 0x02 && l == 21 && beacon == "":
+			beacon = fmt.Sprintf("IBEACON %d/%d", int(d[18])<<8|int(d[19]), int(d[20])<<8|int(d[21]))
+		}
 		d = d[2+l:]
 	}
 	if best == len(appleKinds) {
-		return ""
+		return "", model, beacon
 	}
-	return appleKinds[best].kind
+	kind = appleKinds[best].kind
+	if kind == "AIRPODS" && beats {
+		kind = "BEATS"
+	}
+	return kind, model, beacon
 }
 
-// mfrKind hints a device type from manufacturer data (after the company id).
-func mfrKind(company int, d []byte) string {
+// mfrInfo hints a kind, model and beacon info from manufacturer data (after
+// the company id).
+func mfrInfo(company int, d []byte) (kind, model, beacon string) {
 	if len(d) < 1 {
-		return ""
+		return "", "", ""
 	}
 	switch company {
 	case 0x004C:
-		return appleKind(d)
+		return appleInfo(d)
 	case 0x0006:
 		switch d[0] {
 		case 0x01:
-			return "WINDOWS"
+			return "WINDOWS", msModel(d), ""
 		case 0x03:
-			return "SWIFT PAIR"
+			return "SWIFT PAIR", "", ""
 		}
 	}
-	return ""
+	return "", "", ""
 }
 
 // sanitize keeps printable ASCII, upper-cased and trimmed.

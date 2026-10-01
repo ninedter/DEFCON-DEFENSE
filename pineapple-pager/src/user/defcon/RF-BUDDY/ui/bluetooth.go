@@ -85,6 +85,10 @@ func (s *BLEScanner) startDump(ctx context.Context) (stop func()) {
 }
 
 func (s *BLEScanner) Run(ctx context.Context) {
+	// The first identification lookup parses the embedded OUI table (slow on
+	// the Pager); do it now in the background so it never lands on the render
+	// loop. The decoder goroutine may block on it, nothing else does.
+	go warmBTDB()
 	for ctx.Err() == nil {
 		_ = exec.CommandContext(ctx, "hciconfig", s.Iface, "up").Run()
 		s.disableScan(ctx)

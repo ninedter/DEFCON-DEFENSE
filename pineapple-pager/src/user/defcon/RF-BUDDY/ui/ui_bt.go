@@ -283,12 +283,9 @@ func (u *ui) renderBTTrack(img *image.RGBA, s Snapshot, now time.Time) {
 		vx := x + textPixelWidth(label, 1) + 8
 		drawTextBox(img, image.Rect(vx, 26, 476, 42), vx, 26, value, vc, true, 1)
 	}
-	tx, maker := "--", t.Maker
+	tx, maker := "--", btMakerText(t.BLEDevice)
 	if t.HasTx {
 		tx = strconv.Itoa(t.TxPower)
-	}
-	if maker == "" {
-		maker = "--"
 	}
 	inline(142, "ADV/S", fmt.Sprintf("%.1f", t.AdvPerSec), cyan)
 	inline(252, "TX", tx, cyan)
@@ -323,7 +320,7 @@ func (u *ui) renderBTTrack(img *image.RGBA, s Snapshot, now time.Time) {
 
 	drawTextBox(img, image.Rect(142, 114, 476, 130), 142, 114, "ADDR", white, true, 1)
 	drawTextBox(img, image.Rect(190, 114, 476, 130), 190, 114, btAddrText(t.BLEDevice, false), cyan, true, 1)
-	kl, kv := "KIND", t.Kind
+	kl, kv := "KIND", btKindText(t.BLEDevice)
 	if t.Name != "" {
 		kl, kv = "NAME", t.Name
 	}

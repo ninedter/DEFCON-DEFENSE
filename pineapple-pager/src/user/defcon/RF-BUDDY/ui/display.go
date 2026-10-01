@@ -55,16 +55,27 @@ var (
 )
 
 func canvasToFramebuffer(img *image.RGBA) []byte {
-	out := make([]byte, frameBytes)
+	return canvasToFramebufferInto(nil, img)
+}
+
+// canvasToFramebufferInto converts the landscape canvas to the rotated RGB565
+// framebuffer layout, reusing out when it is already frame-sized. It walks Pix
+// directly: per-pixel RGBAAt was a top CPU cost on the Pager.
+func canvasToFramebufferInto(out []byte, img *image.RGBA) []byte {
+	if len(out) != frameBytes {
+		out = make([]byte, frameBytes)
+	}
 	for y := 0; y < screenHeight; y++ {
+		row := img.Pix[y*img.Stride : y*img.Stride+screenWidth*4]
+		// The physical landscape canvas is the device framebuffer rotated
+		// counter-clockwise: fb(x=221-y, y=x) == canvas(x,y).
+		i := (fbWidth - 1 - y) * 2
 		for x := 0; x < screenWidth; x++ {
-			p := img.RGBAAt(x, y)
-			v := uint16(p.R>>3)<<11 | uint16(p.G>>2)<<5 | uint16(p.B>>3)
-			// The physical landscape canvas is the device framebuffer rotated
-			// counter-clockwise: fb(x=221-y, y=x) == canvas(x,y).
-			i := (x*fbWidth + (fbWidth - 1 - y)) * 2
+			p := row[x*4 : x*4+3]
+			v := uint16(p[0]>>3)<<11 | uint16(p[1]>>2)<<5 | uint16(p[2]>>3)
 			out[i] = byte(v)
 			out[i+1] = byte(v >> 8)
+			i += fbWidth * 2
 		}
 	}
 	return out
@@ -109,8 +120,11 @@ func maintainDisplayOwnership(fb io.ReadWriteSeeker, expected []byte, scratch *[
 }
 
 // mirror publishes the rendered canvas to the Virtual Pager bridge on :1474.
+// publish only copies pixels; the PNG is encoded on the first request for that
+// frame, so the Pager spends no CPU on encoding while nobody is watching.
 type mirror struct {
 	mu       sync.RWMutex
+	img      *image.RGBA
 	png      []byte
 	etag     string
 	revision uint64
@@ -119,21 +133,33 @@ type mirror struct {
 
 func newMirror() *mirror { return &mirror{updated: make(chan struct{})} }
 
-func (m *mirror) publish(img image.Image) {
-	var b bytes.Buffer
-	// Avoid spending scarce Pager CPU on compression; USB transfer is faster
-	// than the MIPS encoder.
-	encoder := png.Encoder{CompressionLevel: png.NoCompression}
-	if encoder.Encode(&b, img) != nil {
-		return
-	}
+func (m *mirror) publish(img *image.RGBA) {
 	m.mu.Lock()
-	m.png = append(m.png[:0], b.Bytes()...)
+	if m.img == nil || m.img.Bounds() != img.Bounds() {
+		m.img = image.NewRGBA(img.Bounds())
+	}
+	copy(m.img.Pix, img.Pix)
+	m.png = m.png[:0]
 	m.revision++
 	m.etag = fmt.Sprintf("\"rf-buddy-%x\"", m.revision)
 	close(m.updated)
 	m.updated = make(chan struct{})
 	m.mu.Unlock()
+}
+
+// encodedLocked returns the PNG for the current frame, encoding it once.
+// The caller holds m.mu for writing.
+func (m *mirror) encodedLocked() []byte {
+	if len(m.png) == 0 && m.img != nil {
+		var b bytes.Buffer
+		// Avoid spending scarce Pager CPU on compression; USB transfer is
+		// faster than the MIPS encoder.
+		encoder := png.Encoder{CompressionLevel: png.NoCompression}
+		if encoder.Encode(&b, m.img) == nil {
+			m.png = append(m.png[:0], b.Bytes()...)
+		}
+	}
+	return m.png
 }
 
 func (m *mirror) handler(buttons chan<- string) http.Handler {
@@ -165,12 +191,12 @@ func (m *mirror) serveScreen(w http.ResponseWriter, r *http.Request) {
 		clientETag = r.URL.Query().Get("rev")
 	}
 	for {
-		m.mu.RLock()
+		m.mu.Lock()
 		etag := m.etag
 		updated := m.updated
 		if etag == "" || clientETag != etag {
-			b := append([]byte(nil), m.png...)
-			m.mu.RUnlock()
+			b := append([]byte(nil), m.encodedLocked()...)
+			m.mu.Unlock()
 			if len(b) == 0 {
 				http.Error(w, "screen not ready", http.StatusServiceUnavailable)
 				return
@@ -179,7 +205,7 @@ func (m *mirror) serveScreen(w http.ResponseWriter, r *http.Request) {
 			_, _ = w.Write(b)
 			return
 		}
-		m.mu.RUnlock()
+		m.mu.Unlock()
 		if r.URL.Query().Get("wait") == "1" && updated != nil {
 			timer := time.NewTimer(5 * time.Second)
 			select {

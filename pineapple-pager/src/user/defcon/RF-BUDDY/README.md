@@ -41,13 +41,52 @@ nearby Bluetooth count. The buzzer tick plays faster as the score rises.
 | B | back to the overview |
 
 **BT tab** — nearby Bluetooth LE devices, browsed in three levels: BRANDS
-(Apple, Microsoft, Nanoleaf, ... UNKNOWN collects devices with no maker ID, service hint or name),
+(Apple, Samsung, Bose, JBL/Harman, Tile, Realtek, ... UNKNOWN collects devices that nothing identifies),
 then the TYPES of that brand (Find My, Nearby, AirPlay, ...), then the DEVICES of
 that type, strongest first; each device row shows its advertised name, or its
 address when it has none. The right panel summarises the highlighted row; at
-the device level it shows the address, address type, name, signal, peak, advert
-rate, TX power, last-seen and first-seen times. A peak or signal with no data
-shows `--`.
+the device level it shows nine rows: ADDR, ADDR TYPE, MAKER, KIND, NAME,
+SIGNAL (`-64 (PK -61)`: now and peak), ADV/S, TX PWR and SEEN (`0S / 04:08:25`:
+seconds since the last advert and the time it was first seen). MAKER is the
+brand (or the registered maker name when only a bare `ID XXXX` is known); KIND
+is the decoded model (for example AIRPODS PRO 2 or WINDOWS LAPTOP) or else the
+type; NAME falls back to the beacon summary (IBEACON 100/7, EDDYSTONE UID).
+Anything unknown, including a signal or peak with no data, shows `--`. At the
+type level a SERVICES line lists the standard Bluetooth services (for example
+HEART RATE) advertised by the strongest device.
+
+ADDR TYPE tells how much to trust the address:
+
+- `PUBLIC` — the fixed address burned in by the maker; its first three bytes
+  identify the maker.
+- `STATIC` — random, but constant until the device reboots.
+- `PRIVATE` — random and rotating (privacy address, as phones and earbuds use),
+  so the same device shows up under several addresses.
+- `NON-RESOLV` — random and short-lived, never resolvable by a paired peer.
+
+### How devices are identified
+
+Passive adverts only, matched offline against a database embedded in the
+payload (no network needed). The brand is the first hit of: Bluetooth SIG
+company ID (also tried byte-swapped), SIG member service UUID (for example
+Tile, Google), keyword in the advertised name, IEEE OUI of a **PUBLIC**
+address only (a random address says nothing about the maker), first word of
+the name, a brand hinted by a service UUID, an `ID XXXX` placeholder for an unregistered company ID, else
+UNKNOWN. The kind is the first hit of: maker-specific decoding (Apple proximity
+pairing models, iBeacon, Microsoft CDP device type, Eddystone), name keyword,
+standard SIG services, SIG appearance, else OTHER.
+
+To regenerate the database (Bluetooth SIG assigned numbers and the Wireshark
+`manuf` file are downloaded once; the build never needs the network):
+
+```sh
+cd pineapple-pager
+python3 tools/gen_btdb.py --download --src /tmp/btsrc --out src/user/defcon/RF-BUDDY/ui/btdb
+```
+
+Data sources: Bluetooth SIG assigned numbers (company identifiers, member and
+service UUIDs, appearance values) and the IEEE OUI registry via the Wireshark
+`manuf` file. Source URLs and download date are in `ui/btdb/SOURCES.md`.
 
 | Button | Brands | Types | Devices |
 |---|---|---|---|
