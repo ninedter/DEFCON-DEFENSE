@@ -32,8 +32,14 @@ PMKID attacks, handshake capture/crack, captive portals, PineAP karma/rogue-AP.
    soft-float binary for the Pager; all Go dependencies are vendored.
    For a Pager-ready archive with macOS metadata stripped, run `./package.sh`;
    it writes the archive and checksum manifest under `pineapple-pager/dist/`.
-2. Copy `pineapple-pager/library/*` into the Pager's `/mmc/root/payloads/`
-   over USB (merge with existing payloads).
+2. With the Pager on USB, run `./deploy.sh` (key-based SSH to `root@172.16.52.1`).
+   It installs DEFCON-DEFENSE and RF-BUDDY into `/root/payloads/user/defcon/`,
+   removes the old `user/general/DEFCON_DEFENSE` copy, and registers the
+   `defcon` folder in the Payloads menu (`/etc/config/payloads`). Use
+   `./deploy.sh --dry-run` to preview. A firmware update may reset the menu
+   list; re-run `./deploy.sh` afterwards. To install over USB storage instead,
+   copy `library/*` into `/mmc/root/payloads/` and add
+   `list payloaddir 'user/defcon'` to `/etc/config/payloads`.
 3. **Arm the auto-hooks:** make sure these directories have **no** `DISABLED.`
    prefix on the device (or enable them in the on-device **Alerts** menu):
    - `alerts/deauth_flood_detected/defcon_sentry`
