@@ -106,7 +106,7 @@ DEFCON-DEFENSE's `ui/main.go`, not refactored into a shared package.
 | `WEAK_SIGNAL_DBM` | `-70` | Office AP signal below this → `WEAK COVERAGE`. |
 | `LOG_MAX_MB` | `20` | Per-session log cap. |
 | `MIN_FREE_MB` | `64` | Logging pauses below this free space. |
-| `TICK_RINGTONE` | `"tick"` | Short ringtone for each lock-on tick; falls back to `VIBRATE 40`. |
+| `TICK_RINGTONE` | `"tick:d=32,o=6,b=200:c"` | Lock-on tick: inline RTTTL or any ringtone name; played with `RINGTONE`, falls back to `VIBRATE` with the same pattern. |
 
 ## Measurement
 
@@ -114,7 +114,7 @@ DEFCON-DEFENSE's `ui/main.go`, not refactored into a shared package.
 
 `_pineap EXAMINE CHANNEL <n> 300` per dwell (re-issued on every tune; the 300 s lock
 expires on its own if RF-BUDDY dies). `_pineap EXAMINE CANCEL` on exit (Go defer and the
-`payload.sh` cleanup trap). A tune error marks that channel skipped for the session.
+`payload.sh` cleanup trap). In overview, a channel is skipped after 3 consecutive tune failures (a successful tune resets the count); skips are cleared every 20th sweep cycle and whenever every channel is skipped, so transient failures recover. Lock mode never skips.
 
 ### Capability probe
 
@@ -122,7 +122,7 @@ At launch: lock channel 6; capture for 300 ms; wait 500 ms and read
 `iw dev wlan1mon info` — if the channel is not 6, fail with a clear error (something else
 is moving the radio). Capture failure is **fatal** (every metric depends on it). Bluetooth
 availability = `hcitool` on PATH and `/sys/class/bluetooth/hci0` present; if absent, BT
-shows `N/A` and `BT DENSE` is skipped.
+shows `N/A` and `BT DENSE` is skipped. If the capture socket cannot be opened, the open error (for example "operation not permitted") is carried into the probe and shown on the fatal screen, and the radio is released immediately after a fatal probe.
 
 ### Frames (`frames.go`)
 
@@ -152,8 +152,10 @@ the list of 5 GHz channels in use (default 36–48, 149–165 when Recon has non
 
 ### Bluetooth
 
-Background `hcitool -i hci0 lescan --duplicates` (restarted if it exits); unique addresses
-in a rolling 30 s window.
+Background `hcitool -i hci0 lescan --passive --duplicates` (passive: no scan requests are
+sent; restarted if it exits); unique addresses in a rolling 30 s window. The scan is stopped
+with SIGINT, followed by a scan-disable (`hcitool -i hci0 cmd 0x08 0x000c 00 00`), on exit and
+before each restart.
 
 ### Cadence
 
@@ -220,7 +222,8 @@ TO ONE CHANNEL AT A TIME`. Advances to Overview after 2 s.
   (SSID or BSSID, dBm); `BT/BLE NEARBY <n> DEV`.
 - Tick: interval 2 s at score 20 → 0.3 s at 100; off below 20; toggled with UP. The UI
   writes the interval (ms, `0` = off) to a tick file; a `payload.sh` loop plays
-  `RINGTONE $TICK_RINGTONE`, falling back to `VIBRATE 40`.
+  `RINGTONE $TICK_RINGTONE` (default an inline RTTTL beep), falling back to
+  `VIBRATE $TICK_RINGTONE` with the same pattern.
 - Footer: `B BACK` · `LEFT/RIGHT CH` · `UP AUDIO` · `A MARK SPOT`.
 - `MARK SPOT` appends a numbered mark to `marks.csv` and toasts
   `MARK 3 @ 12:42 - SCORE 91` (or `MARK NOT SAVED: LOG PAUSED`).
@@ -250,17 +253,17 @@ Virtual Pager → Download Loot.
 - **Single instance:** lock directory `/tmp/rf_buddy.lock` with the owner PID; a second
   launch shows "RF-BUDDY is already running." and exits without touching anything.
 - **Cleanup** (`trap` on EXIT/INT/TERM/HUP and after the binary returns or crashes):
-  stop the tick loop and UI, `killall hcitool`, `_pineap EXAMINE CANCEL`, remove the tick
+  stop the tick loop and UI, `killall -INT hcitool` plus an LE scan-disable, `_pineap EXAMINE CANCEL`, remove the tick
   file, release the lock. Idempotent.
-- Tune failure → channel skipped; capture or channel-lock failure at probe → fatal screen.
+- Overview tune failure → channel skipped after 3 consecutive failures (cleared every 20 cycles or when all are skipped); capture or channel-lock failure at probe → fatal screen.
 
 ## Deployment (`deploy.sh`)
 
 Run from the Mac with the Pager on USB (`root@172.16.52.1`, key-based SSH):
 
 1. `./build.sh` (fresh `library/`).
-2. Copy `library/user/defcon/` to `/mmc/root/payloads/user/defcon/` (replace).
-3. Remove the old `/mmc/root/payloads/user/general/DEFCON_DEFENSE` if present.
+2. Copy `library/user/defcon/` to `/mmc/root/payloads/user/defcon/` (the previous folder is backed up, see step 3).
+3. Move the old `/mmc/root/payloads/user/general/DEFCON_DEFENSE` (and any previous `user/defcon`) to `/mmc/root/payload-backups/<timestamp>/` instead of removing it.
 4. Register the category if missing: `uci add_list payloads.directories.payloaddir='user/defcon'`
    and `uci commit payloads`.
 5. Print what changed. `--dry-run` prints the commands without running them.

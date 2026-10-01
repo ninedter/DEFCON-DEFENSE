@@ -13,7 +13,8 @@ RF-BUDDY measures what it can hear directly:
 - **Retry %** — how many frames are retransmissions. Lots of retries on a channel
   that is not busy usually means radio interference.
 - **APs** — networks on the channel, plus 2.4 GHz networks on overlapping channels.
-- **Bluetooth** — nearby BLE devices (earbuds, watches, phones).
+- **Bluetooth** — nearby BLE devices (earbuds, watches, phones), counted with a
+  passive scan that never transmits.
 
 ## Screens and buttons
 
