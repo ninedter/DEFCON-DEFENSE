@@ -224,12 +224,10 @@ func TestAppleTLVKinds(t *testing.T) {
 
 func TestAppearanceType(t *testing.T) {
 	tests := map[int]string{
-		-1: "", 0: "", 0x0040: "PHONE", 0x00C0: "WATCH", 0x0200: "TAG" + "", 0x03C1: "KEYBOARD",
+		-1: "", 0: "", 0x0040: "PHONE", 0x00C0: "WATCH", 0x0200: "TAG", 0x03C1: "KEYBOARD",
 		0x03C2: "MOUSE", 0x03C0: "HID", 0x0941: "EARBUD", 0x0943: "HEADPHONES", 0x0940: "AUDIO",
 		0x0480: "CYCLING SENSOR", 0x7FFF: "",
 	}
-	tests[0x0200] = "TAG"
-	tests[0x0480] = "CYCLING SENSOR"
 	for v, want := range tests {
 		if got := AppearanceType(v); got != want {
 			t.Errorf("%#x: got %q want %q", v, got, want)

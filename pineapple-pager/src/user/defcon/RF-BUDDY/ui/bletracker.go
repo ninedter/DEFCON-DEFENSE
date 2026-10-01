@@ -113,8 +113,8 @@ func (t *BLETracker) Observe(a Advert, at time.Time) {
 	if a.BrandHint != "" {
 		e.hint = a.BrandHint
 	}
-	if at := AppearanceType(a.Appearance); at != "" {
-		e.appear = at
+	if ap := AppearanceType(a.Appearance); ap != "" {
+		e.appear = ap
 	}
 	if a.HasTx {
 		e.tx, e.hasTx = a.TxPower, true
@@ -294,7 +294,10 @@ func bleLabel(d BLEDevice) string {
 		if len(a) > 8 {
 			a = a[:8]
 		}
-		return "UNKNOWN " + a
+		if typ == "OTHER" {
+			return "UNKNOWN " + a
+		}
+		return typ + " " + a
 	}
 	if typ == "OTHER" {
 		return brand + " DEVICE"

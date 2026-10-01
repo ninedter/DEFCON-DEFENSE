@@ -30,7 +30,9 @@ func TestBLELabel(t *testing.T) {
 	}{
 		{BLEDevice{Name: "TAG", Brand: "APPLE", Type: "X"}, "TAG"},
 		{BLEDevice{Brand: "APPLE", Type: "AIRPODS"}, "APPLE AIRPODS"},
-		{BLEDevice{Brand: "UNKNOWN", Type: "FAST PAIR", Addr: "4B:63:B5:11:22:33"}, "UNKNOWN 4B:63:B5"},
+		{BLEDevice{Brand: "UNKNOWN", Type: "FAST PAIR", Addr: "4B:63:B5:11:22:33"}, "FAST PAIR 4B:63:B5"},
+		{BLEDevice{Brand: "UNKNOWN", Type: "EDDYSTONE", Addr: "4B:63:B5:11:22:33"}, "EDDYSTONE 4B:63:B5"},
+		{BLEDevice{Brand: "UNKNOWN", Type: "OTHER", Addr: "4B:63:B5:11:22:33"}, "UNKNOWN 4B:63:B5"},
 		{BLEDevice{Brand: "GOOGLE", Type: "FAST PAIR"}, "GOOGLE FAST PAIR"},
 		{BLEDevice{Brand: "BOSE", Type: "OTHER"}, "BOSE DEVICE"},
 		{BLEDevice{Addr: "4B:63:B5:11:22:33"}, "UNKNOWN 4B:63:B5"},

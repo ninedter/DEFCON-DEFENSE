@@ -40,15 +40,20 @@ nearby Bluetooth count. The buzzer tick plays faster as the score rises.
 | A | MARK SPOT — writes a numbered marker to the log |
 | B | back to the overview |
 
-**BT tab** — nearby Bluetooth LE devices, strongest first, with the selected
-device's address, maker, signal, peak, advert rate, TX power and last-seen time.
+**BT tab** — nearby Bluetooth LE devices, browsed in three levels: BRANDS
+(Apple, Microsoft, Nanoleaf, ... UNKNOWN for random addresses with no clues),
+then the TYPES of that brand (Find My, Nearby, AirPlay, ...), then the DEVICES of
+that type, strongest first. The right panel summarises the highlighted row; at
+the device level it shows the address, address type, name, signal, peak, advert
+rate, TX power, last-seen and first-seen times. A peak or signal with no data
+shows `--`.
 
-| Button | Action |
-|---|---|
-| LEFT / RIGHT | select the previous / next device |
-| UP / DOWN | cycle tabs: 2.4 GHz / 5 GHz / BT |
-| A | TRACK the selected device |
-| B | exit |
+| Button | Brands | Types | Devices |
+|---|---|---|---|
+| LEFT / RIGHT | previous / next brand | previous / next type | previous / next device |
+| UP / DOWN | cycle tabs: 2.4 GHz / 5 GHz / BT | previous / next type | previous / next device |
+| A | open the brand's types | open the type's devices | TRACK the device |
+| B | exit | back to brands | back to types |
 
 **BT track** — a walk-around proximity meter for one device: big signal
 strength with VERY CLOSE / CLOSE / NEAR / FAR, closer/farther trend, peak, a
@@ -57,10 +62,10 @@ tick speeds up as you get closer.
 
 | Button | Action |
 |---|---|
-| LEFT / RIGHT | track the previous / next device |
+| LEFT / RIGHT | track the previous / next device of the same brand and type |
 | UP | tick on/off |
 | A | MARK SPOT — writes a numbered marker to the log |
-| B | back to the BT list |
+| B | back to the device list |
 
 BT marks go in `marks.csv` as `n,epoch,bt,ADDRESS,RSSI,LABEL` (the channel
 column holds the device address, the score column its signal in dBm).

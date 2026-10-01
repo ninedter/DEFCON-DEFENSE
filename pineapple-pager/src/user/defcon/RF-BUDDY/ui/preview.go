@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"image/png"
 	"os"
 	"path/filepath"
@@ -74,37 +75,76 @@ func noBluetoothSnapshot(now time.Time) Snapshot {
 func previewBTSnapshot(now time.Time) Snapshot {
 	s := previewSnapshot(now, false)
 	type dev struct {
-		addr, label, maker, kind string
-		rssi, peak               int
-		adv                      float64
-		tx                       int
-		hasTx, random            bool
+		brand, typ, name string
+		rssi             int
+		adv              float64
+		tx               int
 	}
+	// a realistic office mix: lots of Apple, a Nanoleaf strip, Microsoft, randoms
 	devs := []dev{
-		{"68:EB:EC:8C:6E:01", "APPLE AIRPODS", "APPLE", "AIRPODS", -42, -38, 9.8, 0, false, true},
-		{"74:4D:BD:CD:0F:C5", "NANOLEAF STRIP FCE", "", "", -55, -49, 4.2, 12, true, false},
-		{"02:68:EB:EC:8C:6E", "MICROSOFT SWIFT PAIR", "MICROSOFT", "SWIFT PAIR", -63, -58, 2.1, 0, false, true},
-		{"4B:63:B5:11:22:33", "UNKNOWN 4B:63:B5", "", "", -67, -60, 1.5, 0, false, true},
-		{"11:22:33:44:55:66", "GALAXY WATCH5 (LONG NAME HERE)", "SAMSUNG", "", -72, -66, 3.3, 8, true, false},
-		{"22:33:44:55:66:77", "GOOGLE FAST PAIR", "GOOGLE", "FAST PAIR", -75, -70, 1.1, 0, false, true},
-		{"33:44:55:66:77:88", "APPLE NEARBY", "APPLE", "NEARBY", -78, -61, 0.9, 0, false, true},
-		{"44:55:66:77:88:99", "GARMIN DEVICE", "GARMIN", "", -83, -80, 0.7, 0, false, false},
-		{"55:66:77:88:99:AA", "XIAOMI DEVICE", "XIAOMI", "", -86, -82, 0.6, 0, false, false},
-		{"66:77:88:99:AA:BB", "UNKNOWN 66:77:88", "", "", -91, -88, 0.4, 0, false, true},
-		{"77:88:99:AA:BB:CC", "APPLE FIND MY", "APPLE", "FIND MY", -95, -90, 0.3, 0, false, true},
-		{"88:99:AA:BB:CC:DD", "ESPRESSIF DEVICE", "ESPRESSIF", "", -100, -97, 0.2, 0, false, false},
+		{"APPLE", "AIRPODS", "", -42, 9.8, 0},
+		{"APPLE", "FIND MY", "", -48, 2.1, 0},
+		{"NANOLEAF", "OTHER", "NANOLEAF STRIP FCE", -55, 4.2, 12},
+		{"APPLE", "NEARBY", "", -57, 3.0, 0},
+		{"APPLE", "FIND MY", "", -59, 1.8, 0},
+		{"MICROSOFT", "SWIFT PAIR", "", -63, 2.1, 0},
+		{"APPLE", "AIRPLAY", "", -64, 1.4, 0},
+		{"APPLE", "FIND MY", "", -66, 1.6, 0},
+		{"UNKNOWN", "OTHER", "", -67, 1.5, 0},
+		{"APPLE", "HANDOFF", "", -68, 1.1, 0},
+		{"APPLE", "FIND MY", "", -70, 1.2, 0},
+		{"APPLE", "NEARBY", "", -71, 0.9, 0},
+		{"SAMSUNG", "WATCH", "GALAXY WATCH5 PRO (LIVING ROOM)", -72, 3.3, 8},
+		{"APPLE", "FIND MY", "", -73, 1.0, 0},
+		{"GOOGLE", "FAST PAIR", "", -75, 1.1, 0},
+		{"APPLE", "FIND MY", "", -76, 0.9, 0},
+		{"APPLE", "NEARBY", "", -77, 0.8, 0},
+		{"MICROSOFT", "WINDOWS", "", -78, 0.7, 0},
+		{"APPLE", "FIND MY", "", -79, 0.8, 0},
+		{"UNKNOWN", "EDDYSTONE", "", -80, 0.6, 0},
+		{"APPLE", "FIND MY", "", -81, 0.7, 0},
+		{"APPLE", "NEARBY", "", -82, 0.6, 0},
+		{"TILE", "TRACKER", "", -83, 0.5, 0},
+		{"APPLE", "FIND MY", "", -84, 0.6, 0},
+		{"GARMIN", "OTHER", "", -85, 0.7, 0},
+		{"APPLE", "NEARBY", "", -86, 0.5, 0},
+		{"MICROSOFT", "SWIFT PAIR", "", -87, 0.5, 0},
+		{"APPLE", "FIND MY", "", -88, 0.5, 0},
+		{"UNKNOWN", "OTHER", "", -89, 0.4, 0},
+		{"XIAOMI", "OTHER", "", -90, 0.6, 0},
+		{"APPLE", "NEARBY", "", -91, 0.4, 0},
+		{"MICROSOFT", "WINDOWS", "", -92, 0.4, 0},
+		{"UNKNOWN", "OTHER", "", -93, 0.3, 0},
+		{"APPLE", "AIRPLAY", "", -94, 0.3, 0},
+		{"ESPRESSIF", "OTHER", "", -95, 0.2, 0},
+		{"APPLE", "FIND MY", "", -100, 0.2, 0},
+		{"UNKNOWN", "OTHER", "", -100, 0.2, 0},
 	}
 	for i, d := range devs {
-		s.BT = append(s.BT, BLEDevice{Addr: d.addr, Random: d.random, Label: d.label, Maker: d.maker, Kind: d.kind,
-			RSSI: d.rssi, Peak: d.peak, AdvPerSec: d.adv, TxPower: d.tx, HasTx: d.hasTx, LastSeen: now.Add(-time.Duration(i%4) * time.Second)})
+		b := BLEDevice{
+			Addr:   fmt.Sprintf("%02X:%02X:%02X:%02X:%02X:%02X", 0x40+i, 0x63^i, 0xB5-i, 0x11*(i%9), 0x20+3*i, 0xA0+i),
+			Random: d.brand == "APPLE" || d.brand == "UNKNOWN",
+			Brand:  d.brand, Type: d.typ, Name: d.name, Maker: d.brand, Kind: d.typ,
+			RSSI: d.rssi, Peak: min(-30, d.rssi+6+i%5), AdvPerSec: d.adv, TxPower: d.tx, HasTx: d.tx != 0,
+			LastSeen:  now.Add(-time.Duration(i%4) * time.Second),
+			FirstSeen: now.Add(-time.Duration(60+i*47) * time.Second),
+		}
+		if d.rssi <= -100 {
+			b.Peak = -100
+		}
+		if d.brand == "UNKNOWN" {
+			b.Maker = ""
+		}
+		b.Label = bleLabel(b)
+		s.BT = append(s.BT, b)
 	}
-	s.BTCount, s.HasBT, s.BTAdvPerSec = len(devs), true, 31
+	s.BTCount, s.HasBT, s.BTAdvPerSec = len(devs), true, 90
 	return s
 }
 
 func previewBTTrack(now time.Time, lost bool) Snapshot {
 	s := previewBTSnapshot(now)
-	t := BLETrackView{BLEDevice: s.BT[1], Trend: TrendRising, PeakAt: now.Add(-45 * time.Second)}
+	t := BLETrackView{BLEDevice: s.BT[2], Trend: TrendRising, PeakAt: now.Add(-45 * time.Second)}
 	t.Name = "NANOLEAF STRIP FCE"
 	t.RSSI, t.Peak = -41, -38
 	for i := 0; i < lockHistoryLen; i++ {
@@ -139,16 +179,21 @@ func previewCases(now time.Time) []previewCase {
 		}
 	}
 	btSnap, btEmpty := previewBTSnapshot(now), previewBTSnapshot(now)
-	btEmpty.BT, btEmpty.BTCount = nil, 0
+	btEmpty.BT, btEmpty.BTCount, btEmpty.BTAdvPerSec = nil, 0, 0
 	btNA := previewBTSnapshot(now)
 	btNA.BT, btNA.BTCount, btNA.HasBT = nil, 0, false
-	mkBT := func(scr screen, addr string, audio bool) func() *ui {
+	mkBT := func(level int, brand, typ, addr string, audio bool) func() *ui {
 		return func() *ui {
 			u := newUI(nil, nil, clock)
-			u.caps, u.probed, u.screen, u.btAddr, u.audio = okCaps, true, scr, addr, audio
+			u.caps, u.probed, u.audio = okCaps, true, audio
+			u.btBrand, u.btType, u.btAddr = brand, typ, addr
+			u.setBTLevel(level)
 			return u
 		}
 	}
+	trackAddr := btSnap.BT[2].Addr
+	findMy := DevicesOf(btSnap.BT, "APPLE", "FIND MY")
+	findMyLast := findMy[len(findMy)-2].Addr
 	return []previewCase{
 		{"01-probe-checking.png", normal, mk(okCaps, false, screenProbe, Band24, "")},
 		{"02-probe-result.png", normal, mk(noBT, true, screenProbe, Band24, "")},
@@ -159,11 +204,15 @@ func previewCases(now time.Time) []previewCase {
 		{"07-fatal.png", normal, mk(fatal, true, screenFatal, Band24, "")},
 		{"08-stress-overview.png", stress, mk(okCaps, true, screenOverview, Band5, "")},
 		{"09-stress-lock.png", stress, mk(okCaps, true, screenLock, Band24, "MARK 12 @ 12:42 - SCORE 100 WITH A VERY LONG OPERATOR NOTE")},
-		{"10-bt-overview.png", btSnap, mkBT(screenBT, "77:88:99:AA:BB:CC", true)},
-		{"11-bt-overview-empty.png", btEmpty, mkBT(screenBT, "", true)},
-		{"12-bt-overview-na.png", btNA, mkBT(screenBT, "", true)},
-		{"13-bt-track.png", previewBTTrack(now, false), mkBT(screenBTTrack, "74:4D:BD:CD:0F:C5", true)},
-		{"14-bt-track-lost.png", previewBTTrack(now, true), mkBT(screenBTTrack, "74:4D:BD:CD:0F:C5", false)},
+		{"10-bt-brands.png", btSnap, mkBT(btLevelBrands, "UNKNOWN", "", "", true)},
+		{"11-bt-types-apple.png", btSnap, mkBT(btLevelTypes, "APPLE", "FIND MY", "", true)},
+		{"12-bt-devices-find-my.png", btSnap, mkBT(btLevelDevices, "APPLE", "FIND MY", findMyLast, true)},
+		{"13-bt-device-long-name.png", btSnap, mkBT(btLevelDevices, "SAMSUNG", "WATCH", "", true)},
+		{"14-bt-types-empty.png", btSnap, mkBT(btLevelTypes, "GONE BRAND", "", "", true)},
+		{"15-bt-brands-empty.png", btEmpty, mkBT(btLevelBrands, "", "", "", true)},
+		{"16-bt-na.png", btNA, mkBT(btLevelBrands, "", "", "", true)},
+		{"17-bt-track.png", previewBTTrack(now, false), mkBT(btLevelTrack, "NANOLEAF", "OTHER", trackAddr, true)},
+		{"18-bt-track-lost.png", previewBTTrack(now, true), mkBT(btLevelTrack, "NANOLEAF", "OTHER", trackAddr, false)},
 	}
 }
 

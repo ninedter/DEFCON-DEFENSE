@@ -46,6 +46,9 @@ type ui struct {
 	probed     bool
 	probeUntil time.Time
 	band       Band
+	btLevel    int
+	btBrand    string
+	btType     string
 	btAddr     string
 	selected   [2]int
 	audio      bool
@@ -145,7 +148,7 @@ func (u *ui) cycleTab(delta int) {
 	}
 	next := (cur + delta + 3) % 3
 	if next == 2 {
-		u.screen = screenBT
+		u.setBTLevel(btLevelBrands)
 		return
 	}
 	u.screen, u.band = screenOverview, Band(next)

@@ -10,6 +10,14 @@ import (
 
 const btVisibleRows = 9
 
+// BT browser levels: brands -> types -> devices -> track.
+const (
+	btLevelBrands = iota
+	btLevelTypes
+	btLevelDevices
+	btLevelTrack
+)
+
 // btIndex returns the index of the selected device, falling back to 0 when the
 // remembered address is gone. ok is false for an empty list.
 func (u *ui) btIndex(list []BLEDevice) (int, bool) {
@@ -44,27 +52,91 @@ func (u *ui) moveBT(list []BLEDevice, delta int) bool {
 }
 
 func btDelta(button string) int {
-	if button == "LEFT" {
+	if button == "LEFT" || button == "UP" {
 		return -1
 	}
 	return 1
 }
 
+// groupIndex returns the index of the group called name, 0 when it is gone.
+func groupIndex(groups []BTGroup, name string) int {
+	for i, g := range groups {
+		if g.Name == name {
+			return i
+		}
+	}
+	return 0
+}
+
+// moveGroup selects the neighbouring group and returns its name.
+func moveGroup(groups []BTGroup, cur string, delta int) string {
+	if len(groups) == 0 {
+		return cur
+	}
+	return groups[clampIndex(groupIndex(groups, cur)+delta, len(groups))].Name
+}
+
+func (u *ui) setBTLevel(level int) {
+	u.btLevel = level
+	if level == btLevelTrack {
+		u.screen = screenBTTrack
+	} else {
+		u.screen = screenBT
+	}
+}
+
+// btDevices lists the devices of the browsed brand and type.
+func (u *ui) btDevices(s Snapshot) []BLEDevice {
+	return DevicesOf(s.BT, u.btBrand, u.btType)
+}
+
 func (u *ui) handleBT(button string, s Snapshot) bool {
-	switch button {
-	case "B":
-		return true
-	case "LEFT", "RIGHT":
-		u.moveBT(s.BT, btDelta(button))
-	case "UP":
-		u.cycleTab(1)
-	case "DOWN":
-		u.cycleTab(-1)
-	case "A":
-		if d, ok := u.btSelected(s.BT); ok {
-			u.btAddr = d.Addr
-			u.ctrl.TrackBT(d.Addr)
-			u.screen = screenBTTrack
+	switch u.btLevel {
+	case btLevelBrands:
+		groups := GroupByBrand(s.BT)
+		switch button {
+		case "B":
+			return true
+		case "LEFT", "RIGHT":
+			u.btBrand = moveGroup(groups, u.btBrand, btDelta(button))
+		case "UP":
+			u.cycleTab(1)
+		case "DOWN":
+			u.cycleTab(-1)
+		case "A":
+			if len(groups) > 0 {
+				u.btBrand = groups[groupIndex(groups, u.btBrand)].Name
+				u.btType, u.btAddr = "", ""
+				u.setBTLevel(btLevelTypes)
+			}
+		}
+	case btLevelTypes:
+		groups := GroupByType(s.BT, u.btBrand)
+		switch button {
+		case "B":
+			u.setBTLevel(btLevelBrands)
+		case "LEFT", "RIGHT", "UP", "DOWN":
+			u.btType = moveGroup(groups, u.btType, btDelta(button))
+		case "A":
+			if len(groups) > 0 {
+				u.btType = groups[groupIndex(groups, u.btType)].Name
+				u.btAddr = ""
+				u.setBTLevel(btLevelDevices)
+			}
+		}
+	default:
+		list := u.btDevices(s)
+		switch button {
+		case "B":
+			u.setBTLevel(btLevelTypes)
+		case "LEFT", "RIGHT", "UP", "DOWN":
+			u.moveBT(list, btDelta(button))
+		case "A":
+			if d, ok := u.btSelected(list); ok {
+				u.btAddr = d.Addr
+				u.ctrl.TrackBT(d.Addr)
+				u.setBTLevel(btLevelTrack)
+			}
 		}
 	}
 	return false
@@ -74,9 +146,9 @@ func (u *ui) handleBTTrack(button string, s Snapshot) bool {
 	switch button {
 	case "B":
 		u.ctrl.UntrackBT()
-		u.screen = screenBT
+		u.setBTLevel(btLevelDevices)
 	case "LEFT", "RIGHT":
-		if u.moveBT(s.BT, btDelta(button)) {
+		if u.moveBT(u.btDevices(s), btDelta(button)) {
 			u.ctrl.TrackBT(u.btAddr)
 		}
 	case "UP":
@@ -127,47 +199,6 @@ func fmtRSSI(rssi int) string {
 	return strconv.Itoa(rssi)
 }
 
-func (u *ui) renderBT(img *image.RGBA, s Snapshot, now time.Time) {
-	renderTitle(img, "RF-BUDDY", 120)
-	renderTabs(img, 2)
-	status, limit := "BT N/A", 392
-	if s.HasBT {
-		status = fmt.Sprintf("%d DEV  %.0f ADV/S", len(s.BT), s.BTAdvPerSec)
-	}
-	if !s.LogPaused {
-		limit = 430
-	}
-	drawTextBox(img, image.Rect(290, 3, limit, 20), 290, 3, trimCells(status, (limit-290)/textCellWidth), cyan, true, 1)
-	renderClock(img, now, s.LogPaused)
-
-	vLine(img, 260, 24, 198, cyan2)
-	switch {
-	case !s.HasBT:
-		drawText(img, 6, 90, "BLUETOOTH UNAVAILABLE", dim, true, 1)
-	case len(s.BT) == 0:
-		drawText(img, 6, 24, "NEARBY (STRONGEST FIRST)", dim, true, 1)
-		drawText(img, 6, 90, "NO DEVICES YET", dim, true, 1)
-	default:
-		drawText(img, 6, 24, "NEARBY (STRONGEST FIRST)", dim, true, 1)
-		drawTextRightBox(img, image.Rect(214, 24, 256, 40), 24, "DBM", dim, true)
-		sel, _ := u.btIndex(s.BT)
-		top := max(0, sel-(btVisibleRows-1))
-		for row := 0; row < btVisibleRows && top+row < len(s.BT); row++ {
-			d := s.BT[top+row]
-			y := 44 + row*16
-			c := white
-			if top+row == sel {
-				c = yellow
-				drawText(img, 6, y, ">", yellow, true, 1)
-			}
-			drawTextBox(img, image.Rect(14, y, 210, y+16), 14, y, trimCells(d.Label, 24), c, true, 1)
-			drawTextRightBox(img, image.Rect(210, y, 256, y+16), y, fmtRSSI(d.RSSI), signalColor(d.RSSI), true)
-		}
-		renderBTPanel(img, s.BT[sel], now)
-	}
-	renderFooter(img, hint{"B", "EXIT"}, "LEFT/RIGHT DEV", "UP/DN BAND", hint{"A", "TRACK"})
-}
-
 // btAddrText returns the address; short drops the first octet to fit the
 // 16-cell metric value box.
 func btAddrText(d BLEDevice, short bool) string {
@@ -185,30 +216,10 @@ func secondsAgo(at, now time.Time) int {
 	return max(0, int(now.Sub(at)/time.Second))
 }
 
-func renderBTPanel(img *image.RGBA, d BLEDevice, now time.Time) {
-	box := image.Rect(266, 24, 476, 198)
-	drawTextBox(img, box, 266, 26, trimCells(d.Label, 26), yellow, true, 1)
-	maker := d.Maker
-	if maker == "" {
-		maker = "--"
-	}
-	tx := "--"
-	if d.HasTx {
-		tx = fmt.Sprintf("%d DBM", d.TxPower)
-	}
-	metricRow(img, 52, "ADDR", btAddrText(d, true), cyan)
-	metricRow(img, 68, "MAKER", maker, cyan)
-	metricRow(img, 84, "SIGNAL", fmt.Sprintf("%d DBM", d.RSSI), signalColor(d.RSSI))
-	metricRow(img, 100, "PEAK", fmt.Sprintf("%d DBM", d.Peak), cyan)
-	metricRow(img, 116, "ADV/S", fmt.Sprintf("%.1f", d.AdvPerSec), cyan)
-	metricRow(img, 132, "TX PWR", tx, cyan)
-	metricRow(img, 148, "SEEN", fmt.Sprintf("%d S AGO", secondsAgo(d.LastSeen, now)), cyan)
-}
-
 func (u *ui) renderBTTrack(img *image.RGBA, s Snapshot, now time.Time) {
 	t := s.BTTrack
 	if t == nil {
-		d, _ := u.btSelected(s.BT)
+		d, _ := u.btSelected(u.btDevices(s))
 		if d.Addr == "" {
 			d = BLEDevice{Addr: u.btAddr, Label: "UNKNOWN", RSSI: -100}
 		}
@@ -247,7 +258,7 @@ func (u *ui) renderBTTrack(img *image.RGBA, s Snapshot, now time.Time) {
 	if !t.PeakAt.IsZero() {
 		peakAt = "@" + t.PeakAt.Format("15:04")
 	}
-	drawCenteredIn(img, 7, 131, 146, fmt.Sprintf("PEAK %d", t.Peak), dim)
+	drawCenteredIn(img, 7, 131, 146, "PEAK "+fmtRSSI(t.Peak), dim)
 	drawCenteredIn(img, 7, 131, 164, peakAt, dim)
 
 	inline := func(x int, label, value string, vc color.RGBA) {
