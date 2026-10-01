@@ -34,7 +34,7 @@ func TestLoggerWritesHeadersAndSamples(t *testing.T) {
 	}
 	l.WriteSample(Sample{At: logStart, Mode: ModeLock, Channel: Channel{Band24, 6},
 		Metrics: Metrics{AirtimePct: 41.6, HasAirtime: true, FramesPerSec: 212.4, CoChannelAPs: 14, OverlapAPs: 6, BTCount: 23, HasBT: true},
-		Score: 72, Likely: CauseInterference})
+		Score:   72, Likely: CauseInterference})
 	got := readFile(t, filepath.Join(l.Dir(), "samples.csv"))
 	want := "epoch,mode,band,channel,airtime_pct,retry_pct,frames_per_s,aps,overlap_aps,bt_count,score,likely\n" +
 		"1790858525,lock,2.4,6,42,,212,14,6,23,72,INTERFERENCE\n"
