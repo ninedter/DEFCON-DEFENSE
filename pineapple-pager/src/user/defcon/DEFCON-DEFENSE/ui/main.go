@@ -807,6 +807,8 @@ func buttonForLinuxKey(code uint16) string {
 		return "LEFT"
 	case 106: // KEY_RIGHT
 		return "RIGHT"
+	case 116: // KEY_POWER - same gpio-keys device, so our grab hides it from the stock app
+		return "POWER"
 	default:
 		return ""
 	}
@@ -834,6 +836,11 @@ func normalizeButton(raw string) string {
 }
 
 func (a *app) handleButton(button string, s liveState) (exit bool) {
+	if button == "POWER" {
+		// Exit and hand the power button back to the stock Pager app, whose
+		// Power Menu performs the graceful shutdown.
+		return true
+	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	now := time.Now()

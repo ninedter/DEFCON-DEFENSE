@@ -308,3 +308,15 @@ func TestBTTickInterval(t *testing.T) {
 		t.Fatalf("audio off = %v", got)
 	}
 }
+
+// A power press exits from every screen, handing the button back to the stock
+// Pager app (whose Power Menu does the graceful shutdown).
+func TestPowerExitsFromEveryScreen(t *testing.T) {
+	for _, sc := range []screen{screenProbe, screenFatal, screenOverview, screenLock, screenBT, screenBTTrack} {
+		u := newUI(&recordingController{}, nil, time.Now)
+		u.screen = sc
+		if !u.HandleButton("POWER", Snapshot{}) {
+			t.Fatalf("screen %d: POWER did not exit", sc)
+		}
+	}
+}

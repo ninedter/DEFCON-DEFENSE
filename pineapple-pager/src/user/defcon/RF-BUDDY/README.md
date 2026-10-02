@@ -142,12 +142,16 @@ Pager has joined. Buttons only work from the viewer's own on-page buttons (or
 keyboard keys); direct cross-site requests are refused.
 
 While RF-BUDDY runs, the stock Pager menu and the stock Virtual Pager (`:1471`)
-are paused; they return when you press B.
+are paused; they return when you press B. RF-BUDDY also takes over the power
+button (it is on the same input device), so pressing **power** on any screen
+exits RF-BUDDY cleanly and hands the button back to the Pager — then use the
+Pager's Power Menu → **Shutdown** to turn it off.
 
 ### If the Pager menu stays frozen
 
 RF-BUDDY's watchdog resumes the stock menu if RF-BUDDY is killed. If the
-RF-BUDDY app itself hangs, hold the power button to restart the Pager.
+RF-BUDDY app itself hangs, holding the power button until the Pager cuts power
+is the last resort; expect the unclean-shutdown warning on the next boot.
 
 ## Logs
 
