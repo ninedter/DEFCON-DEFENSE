@@ -234,6 +234,18 @@ event. **Clear Session** resets the DEFCON Defense alert history and managed
 PCAP evidence while preserving watched APs, the reviewed baseline, and trusted
 rules. The separate honeypot record remains outside that UI reset.
 
+## Shutting down the Pager
+
+Always turn the Pager off from its **Power Menu → Shutdown**. Cutting power
+(holding the power button until it dies, or letting the battery run flat)
+leaves storage mid-write; the Pager warns about it on the next boot and recent
+loot can be lost. A short press of the power button only turns the screen off.
+
+DEFCON Defense and RF-BUDDY take exclusive use of the Pager's buttons, power
+included, while they run. Pressing **power** in either one exits it cleanly and
+gives the button back to the Pager, so press power once to leave the payload,
+then open the Power Menu and choose Shutdown.
+
 ## This is not a substitute for opsec
 
 Use a VPN, keep device MAC randomization on, turn radios off when idle, and

@@ -352,6 +352,8 @@ func buttonForLinuxKey(code uint16) string {
 		return "LEFT"
 	case 106: // KEY_RIGHT
 		return "RIGHT"
+	case 116: // KEY_POWER - same gpio-keys device, so our grab hides it from the stock app
+		return "POWER"
 	default:
 		return ""
 	}

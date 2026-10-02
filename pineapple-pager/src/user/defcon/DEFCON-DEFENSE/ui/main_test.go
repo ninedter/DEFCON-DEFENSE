@@ -302,7 +302,8 @@ func TestPagerLinuxKeyMapping(t *testing.T) {
 		108: "DOWN",
 		105: "LEFT",
 		106: "RIGHT",
-		116: "",
+		116: "POWER", // KEY_POWER: our input grab hides it from the stock app
+		1:   "",
 	}
 	for code, want := range tests {
 		if got := buttonForLinuxKey(code); got != want {
@@ -685,6 +686,17 @@ func assertVerticalColor(t *testing.T, img *image.RGBA, x, y1, y2 int, want colo
 	for y := y1; y < y2; y++ {
 		if got := img.RGBAAt(x, y); got != want {
 			t.Fatalf("panel border overwritten at (%d,%d): got %#v want %#v", x, y, got, want)
+		}
+	}
+}
+
+// A power press exits from every screen, handing the button back to the stock
+// Pager app, whose Power Menu performs the graceful shutdown.
+func TestPowerExitsFromEveryScreen(t *testing.T) {
+	for sc := screenGeneral; sc <= screenClearSession; sc++ {
+		a := &app{screen: sc, actionFile: filepath.Join(t.TempDir(), "ui_action.psv")}
+		if !a.handleButton("POWER", previewState()) {
+			t.Fatalf("screen %d: POWER did not exit", sc)
 		}
 	}
 }

@@ -267,3 +267,11 @@ func TestPhysicalButtonsMatchPagerColours(t *testing.T) {
 		}
 	}
 }
+
+// The power key shares the Pager's gpio-keys device with A/B and the arrows,
+// so while RF-BUDDY holds its exclusive grab it must handle power itself.
+func TestPowerKeyIsMapped(t *testing.T) {
+	if got := buttonForLinuxKey(116); got != "POWER" { // KEY_POWER
+		t.Fatalf("KEY_POWER mapped to %q, want POWER", got)
+	}
+}

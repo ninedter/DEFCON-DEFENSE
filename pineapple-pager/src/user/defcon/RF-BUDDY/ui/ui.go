@@ -88,6 +88,11 @@ func (u *ui) Advance(now time.Time) bool {
 }
 
 func (u *ui) HandleButton(button string, s Snapshot) (exit bool) {
+	if button == "POWER" {
+		// Exit and hand the power button back to the stock Pager app, whose
+		// Power Menu performs the graceful shutdown.
+		return true
+	}
 	switch u.screen {
 	case screenProbe, screenFatal:
 		return button == "B"
