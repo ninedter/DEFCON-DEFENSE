@@ -76,6 +76,23 @@ UNKNOWN. The kind is the first hit of: maker-specific decoding (Apple proximity
 pairing models, iBeacon, Microsoft CDP device type, Eddystone), name keyword,
 standard SIG services, SIG appearance, else OTHER.
 
+A few more rules come from real office captures:
+
+- **FIND HUB TAG**: a Google Find Hub (formerly Find My Device) network
+  tracker, recognised from its Eddystone frame (0x40/0x41).
+- **CONTINUITY xx**: an Apple Continuity message type that public research does
+  not document yet, so Apple devices are still grouped by what they send.
+- **SVC xxxx**: the device's only clue is a vendor service UUID whose purpose is
+  not public (for example Google `SVC FEF3`, Samsung `SVC FD69`); the brand comes
+  from the Bluetooth SIG member list.
+- **AUDIO**: the maker is a Bluetooth audio-chip vendor (Airoha, Bestechnic,
+  Jieli, Bluetrum, Actions) whose chips ship almost only in earbuds, headphones
+  and speakers.
+- Some cheap audio devices write their own MAC address where the company ID
+  belongs; RF-BUDDY ignores that bogus ID and names them from the MAC prefix.
+- Vendors that spell their name into a 128-bit service UUID (for example
+  "AirohaBLE") are matched by the same name keywords as advertised names.
+
 To regenerate the database (Bluetooth SIG assigned numbers and the Wireshark
 `manuf` file are downloaded once; the build never needs the network):
 
@@ -143,9 +160,11 @@ keyboard keys); direct cross-site requests are refused.
 
 While RF-BUDDY runs, the stock Pager menu and the stock Virtual Pager (`:1471`)
 are paused; they return when you press B. RF-BUDDY also takes over the power
-button (it is on the same input device), so pressing **power** on any screen
-exits RF-BUDDY cleanly and hands the button back to the Pager — then use the
-Pager's Power Menu → **Shutdown** to turn it off.
+button (it is on the same input device). Press **power twice** on any screen
+(the first press shows "PRESS POWER AGAIN TO EXIT"; the second must follow
+within 3 seconds) to exit RF-BUDDY cleanly and hand the button back to the
+Pager — then use the Pager's Power Menu → **Shutdown** to turn it off. A single
+brushed press while you walk around never quits.
 
 ### If the Pager menu stays frozen
 

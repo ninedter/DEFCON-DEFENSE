@@ -165,6 +165,7 @@ type app struct {
 	lastButton       string
 	lastButtonAt     time.Time
 	clearArmedUntil  time.Time
+	powerArmedUntil  time.Time
 	displayedFrame   []byte
 	frameScratch     []byte
 	canvas           *image.RGBA
@@ -793,6 +794,9 @@ func waitForInput(ctx context.Context, fd int, openedAt time.Time) error {
 	}
 }
 
+// powerConfirmHold is how long a first POWER press waits for the second.
+const powerConfirmHold = 3 * time.Second
+
 func buttonForLinuxKey(code uint16) string {
 	switch code {
 	case 304: // BTN_SOUTH - physical red/B on the Pager
@@ -836,11 +840,6 @@ func normalizeButton(raw string) string {
 }
 
 func (a *app) handleButton(button string, s liveState) (exit bool) {
-	if button == "POWER" {
-		// Exit and hand the power button back to the stock Pager app, whose
-		// Power Menu performs the graceful shutdown.
-		return true
-	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	now := time.Now()
@@ -848,6 +847,20 @@ func (a *app) handleButton(button string, s liveState) (exit bool) {
 		return false
 	}
 	a.lastButton, a.lastButtonAt = button, now
+	if button == "POWER" {
+		// Two presses within powerConfirmHold exit and hand the power button
+		// back to the stock Pager app (its Power Menu shuts down gracefully).
+		// One press only asks: a brushed button or a tap to wake the screen
+		// must not end monitoring.
+		if !a.powerArmedUntil.IsZero() && now.Before(a.powerArmedUntil) {
+			return true
+		}
+		a.powerArmedUntil = now.Add(powerConfirmHold)
+		a.toast = "PRESS POWER AGAIN TO EXIT"
+		a.toastUntil = now.Add(powerConfirmHold)
+		return false
+	}
+	a.powerArmedUntil = time.Time{}
 
 	switch a.screen {
 	case screenGeneral:

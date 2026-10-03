@@ -27,9 +27,11 @@ falls back to the stock Pager display when it exits.
 While the application is open it freezes the stock Pager UI process (SIGSTOP)
 and takes exclusive use of the buttons; pressing B on the general screen
 resumes it (SIGCONT), so the Pager menu returns immediately instead of
-restarting through "Initializing system". Pressing the **power** button on any
-screen also exits the same way, so the stock Pager gets the power button back;
-use its Power Menu → **Shutdown** to turn the Pager off cleanly.
+restarting through "Initializing system". Pressing the **power** button twice
+(the first press shows "PRESS POWER AGAIN TO EXIT"; the second must follow
+within 3 seconds) also exits the same way, so the stock Pager gets the power
+button back; use its Power Menu → **Shutdown** to turn the Pager off cleanly.
+A single brushed press never quits.
 
 Long-running sessions use bounded Recon calls, unique atomic state updates,
 low-churn Virtual Pager long polling, a periodically refreshed physical-input

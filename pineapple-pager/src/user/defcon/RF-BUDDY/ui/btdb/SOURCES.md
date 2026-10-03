@@ -1,13 +1,13 @@
 # Identification database sources
 
-Generated on 2026-10-02 by `pineapple-pager/tools/gen_btdb.py`. The raw
+Generated on 2026-10-03 by `pineapple-pager/tools/gen_btdb.py`. The raw
 downloads are not committed; only the derived gzip'd TSV tables in this
 directory (embedded into RF-BUDDY with `//go:embed`).
 
 | Table | Source URL | Entries |
 |-------|------------|---------|
-| `companies.tsv.gz` | https://bitbucket.org/bluetooth-SIG/public/raw/main/assigned_numbers/company_identifiers/company_identifiers.yaml | 4041 |
-| `members.tsv.gz` | https://bitbucket.org/bluetooth-SIG/public/raw/main/assigned_numbers/uuids/member_uuids.yaml | 715 |
+| `companies.tsv.gz` | https://bitbucket.org/bluetooth-SIG/public/raw/main/assigned_numbers/company_identifiers/company_identifiers.yaml | 4045 |
+| `members.tsv.gz` | https://bitbucket.org/bluetooth-SIG/public/raw/main/assigned_numbers/uuids/member_uuids.yaml | 716 |
 | `services.tsv.gz` | https://bitbucket.org/bluetooth-SIG/public/raw/main/assigned_numbers/uuids/service_uuids.yaml | 76 |
 | `appearance.tsv.gz` | https://bitbucket.org/bluetooth-SIG/public/raw/main/assigned_numbers/core/appearance_values.yaml | 342 (categories + subcategories) |
 | `oui.tsv.gz` | https://www.wireshark.org/download/automated/data/manuf (IEEE OUI registry) | 39905 (24-bit prefixes; private/IEEE placeholder rows skipped) |

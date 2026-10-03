@@ -21,8 +21,9 @@ const (
 )
 
 const (
-	probeResultHold = 2 * time.Second
-	toastHold       = 3 * time.Second
+	probeResultHold  = 2 * time.Second
+	toastHold        = 3 * time.Second
+	powerConfirmHold = 3 * time.Second
 )
 
 type Controller interface {
@@ -54,6 +55,8 @@ type ui struct {
 	audio      bool
 	toast      string
 	toastUntil time.Time
+	// powerArmedUntil is when a first POWER press stops counting toward exit.
+	powerArmedUntil time.Time
 }
 
 func newUI(ctrl Controller, marks MarkSink, now func() time.Time) *ui {
@@ -89,10 +92,19 @@ func (u *ui) Advance(now time.Time) bool {
 
 func (u *ui) HandleButton(button string, s Snapshot) (exit bool) {
 	if button == "POWER" {
-		// Exit and hand the power button back to the stock Pager app, whose
-		// Power Menu performs the graceful shutdown.
-		return true
+		// Two presses within powerConfirmHold exit and hand the power button
+		// back to the stock Pager app (its Power Menu shuts down gracefully).
+		// One press only asks: a brushed button or a tap to wake the screen
+		// must not end a walk-around survey.
+		now := u.now()
+		if !u.powerArmedUntil.IsZero() && now.Before(u.powerArmedUntil) {
+			return true
+		}
+		u.powerArmedUntil = now.Add(powerConfirmHold)
+		u.showToast("PRESS POWER AGAIN TO EXIT", now)
+		return false
 	}
+	u.powerArmedUntil = time.Time{}
 	switch u.screen {
 	case screenProbe, screenFatal:
 		return button == "B"

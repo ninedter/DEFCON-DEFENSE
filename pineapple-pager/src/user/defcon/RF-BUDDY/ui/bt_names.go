@@ -110,7 +110,7 @@ var nameRules = []nameRule{
 	sub("MEGABOOM", "LOGITECH", "SPEAKER"),
 	sub("SONOS", "SONOS", "SPEAKER"),
 	word("TILE", "TILE", "TRACKER"), sub("CHIPOLO", "CHIPOLO", "TRACKER"),
-	sub("NANOLEAF", "NANOLEAF", "LIGHT"), sub("PHILIPS HUE", "PHILIPS", "LIGHT"), word("HUE", "PHILIPS", "LIGHT"),
+	sub("NANOLEAF", "NANOLEAF", "LIGHT"), sub("AIROHA", "AIROHA", "AUDIO"), sub("PHILIPS HUE", "PHILIPS", "LIGHT"), word("HUE", "PHILIPS", "LIGHT"),
 	sub("GOVEE", "GOVEE", "LIGHT"), pre("IHOSTER", "GOVEE", "LIGHT"), pre("GVH", "GOVEE", "LIGHT"),
 	sub("WYZE", "WYZE", "SMART HOME"), word("RING", "AMAZON", "SMART HOME"),
 	sub("TESLA", "TESLA", "CAR"), word("OURA", "OURA", "RING"),

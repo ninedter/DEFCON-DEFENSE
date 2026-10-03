@@ -109,6 +109,10 @@ class Normalize(unittest.TestCase):
     def test_region_words(self):
         self.assertEqual(self.brand("Shenzhen Wonderful Sound Technology Co., Ltd."), "WONDERFUL SOUND")
         self.assertEqual(self.brand("Shenzhen Technology Co., Ltd."), "SHENZHEN")
+        # "-shi" is "city": registry names often glue it onto the city.
+        self.assertEqual(self.brand("Xiamenshi C-Chip Technology Co., Ltd."), "C CHIP")
+        self.assertEqual(self.brand("Ningbo Fuda Electronics Co., Ltd."), "FUDA")
+        self.assertEqual(self.brand("Anhui Huami Information Technology Co., Ltd."), "AMAZFIT")
 
     def test_multiword_legal(self):
         self.assertEqual(self.brand("Acme Widgets S.A."), "ACME WIDGETS")

@@ -38,7 +38,14 @@ INDUSTRIAL INDUSTRIES SEMICONDUCTOR SYSTEMS COMMUNICATIONS MOBILE""".split())
 # Multi-word legal suffixes (the punctuation split leaves single letters).
 LEGAL_SEQS = [["L", "L", "C"], ["S", "A"], ["A", "S"], ["B", "V"], ["S", "P", "A"]]
 REGION_WORDS = set("""SHENZHEN GUANGDONG DONGGUAN HANGZHOU SHANGHAI BEIJING ZHUHAI
-XIAMEN SUZHOU""".split())
+XIAMEN SUZHOU GUANGZHOU NINGBO FOSHAN WUHAN CHENGDU TIANJIN SHUNDE ZHONGSHAN
+HUIZHOU JIANGSU ZHEJIANG FUJIAN QINGDAO NANJING CHONGQING JIAXING WENZHOU HEFEI
+CHANGSHA KUNSHAN JIANGMEN SHANTOU""".split())
+
+
+def region_word(w):
+    """A region name, or a region glued to "SHI" (city), e.g. XIAMENSHI."""
+    return w in REGION_WORDS or (w.endswith("SHI") and w[:-3] in REGION_WORDS)
 
 # (normalized prefix, brand); first match wins, matched on word boundaries.
 OVERRIDES = [
@@ -98,7 +105,7 @@ def drop_legal(words):
         i += 1
     if not out:
         return list(words)
-    kept = [w for w in out if w not in REGION_WORDS]
+    kept = [w for w in out if not region_word(w)]
     return kept if kept else out
 
 
