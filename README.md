@@ -30,6 +30,29 @@ attacks against other people.
 The two full-screen payloads are fully independent. They use separate folders,
 ports, logs and deploys.
 
+## Screenshots
+
+These are the Pager's native 480 × 222 screens, shown at 2× and rendered from
+each UI's built-in preview data (`-preview-dir`), not from a live capture.
+
+### DEFCON Defense
+
+| | |
+|---|---|
+| ![DEFCON Defense home screen showing HIGH THREAT state, active monitoring on 2.4 and 5 GHz, and menu entries for threats, AP watch list, monitored networks and clear session](docs/screenshots/defcon-defense-home.png) | ![Threat detail for a deauthentication attack on DEFCON-GUEST, with BSSID, channel, signal and an automatic PCAP capture in progress](docs/screenshots/defcon-defense-threat.png) |
+| **Home.** The overall threat state, which bands are monitored, and the main menu. | **Threat detail.** A deauth attack on a watched network. A bounded PCAP capture starts automatically. |
+| ![Observed APs list showing watched and available networks with BSSID, band, channel and signal](docs/screenshots/defcon-defense-watch-list.png) | ![Evidence list of saved PCAPs for deauth, evil twin and probe flood events with size and status](docs/screenshots/defcon-defense-evidence.png) |
+| **Observed APs.** Choose which nearby networks to watch, straight from live Recon. | **Evidence.** Saved PCAPs with SHA-256 verification. You download them through the Virtual Pager. |
+
+### RF-BUDDY
+
+| | |
+|---|---|
+| ![RF-BUDDY 2.4 GHz channel overview bar chart of airtime per channel, with channel 6 selected scoring 49 MEDIUM and likely interference](docs/screenshots/rf-buddy-overview.png) | ![Channel lock-on meter for channel 6 showing score 49 rising, a 60-second history graph and the strongest transmitters](docs/screenshots/rf-buddy-lock.png) |
+| **Channel overview.** Each channel is scored on airtime, retries, AP overlap and Bluetooth density, with the worst and best channel called out. | **Lock-on meter.** One channel, updated every second, with a buzzer tick and the strongest transmitters. Walk around to find the source. |
+| ![Bluetooth LE brand browser listing Apple, Microsoft, Samsung and other brands with device counts](docs/screenshots/rf-buddy-bluetooth.png) | ![TRACK proximity meter for a Nanoleaf device at -41 dBm, VERY CLOSE and getting closer](docs/screenshots/rf-buddy-track.png) |
+| **Bluetooth browser.** Nearby BLE devices grouped by brand, then type, then individual device. | **TRACK.** A proximity meter for one Bluetooth device, so you can walk right up to it. |
+
 ## Quick start (Pager)
 
 Requirements on your computer:
