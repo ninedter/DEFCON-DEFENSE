@@ -103,7 +103,7 @@ func (t *BLETracker) Tracked(now time.Time) *BLETrackView   // nil when not trac
 **Trend:** compare mean of the last 5 history seconds to the 5 before: >= +3 dB → TrendRising, <= -3 dB → TrendFalling, else TrendSteady.
 
 **Tests (table-driven, from real captured bytes):** Use these two real legacy reports captured on the Pager (H4 event bytes after the 0x04 type byte):
-- `3E 29 02 01 00 00 6E 8C EC EB 68 02 1D 02 01 06 19 16 F7 FD 01 36 7C 66 8B B3 8D 50 42 AC 83 3F 2F 32 33 12 E2 00 00 00 00 03 B3` → Addr "02:68:EB:EC:8C:6E", Random false, RSSI -77 (0xB3), Company -1, no name.
+- `3E 29 02 01 00 00 EE DD CC BB AA 02 1D 02 01 06 19 16 F7 FD 01 36 7C 66 8B B3 8D 50 42 AC 83 3F 2F 32 33 12 E2 00 00 00 00 03 B3` → Addr "02:AA:BB:CC:DD:EE", Random false, RSSI -77 (0xB3), Company -1, no name.
 - `3E 2B 02 01 00 00 C5 0F CD BD 4D 74 1F 02 01 06 1B FF B5 B5 13 52 36 30 31 5A 41 42 37 58 46 43 54 30 39 32 38 63 00 01 00 00 3E 99 A6` → Addr "74:4D:BD:CD:0F:C5", Company 0xB5B5, RSSI -90 (0xA6).
 Also: a synthetic report with AD 0x09 "Nanoleaf Strip FCE" and 0x0A tx 12; an Apple 0x07 AirPods report; two reports in one event; an extended (0x0D) report; truncated packets at every length (no panic, nil); non-ASCII name sanitized; a btsnoop stream (header + 3 records, datalink 1002) built in the test; tracker expiry, smoothing, peak, sort order, AdvPerSec, Track history with gaps (-100), Lost after 5 s, Trend.
 
