@@ -308,7 +308,7 @@ func TestBTRenderSmoke(t *testing.T) {
 // Device rows sit under a BRAND > TYPE breadcrumb, so they show what tells
 // devices apart: the name when advertised, otherwise the address.
 func TestBTRowText(t *testing.T) {
-	named := BLEDevice{Addr: "74:4D:BD:CD:0F:C5", Name: "NANOLEAF STRIP FCE", Label: "NANOLEAF STRIP FCE"}
+	named := BLEDevice{Addr: "74:4D:BD:12:34:56", Name: "NANOLEAF STRIP FCE", Label: "NANOLEAF STRIP FCE"}
 	if got := btRowText(named); got != "NANOLEAF STRIP FCE" {
 		t.Fatalf("named row = %q", got)
 	}
