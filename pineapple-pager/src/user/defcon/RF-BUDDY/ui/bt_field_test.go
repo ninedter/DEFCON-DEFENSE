@@ -24,24 +24,24 @@ func TestFindHubTagFromEddystoneFMDN(t *testing.T) {
 }
 
 func TestUnknownAppleContinuityTypeIsNamed(t *testing.T) {
-	a := parseADFor(t, "50:CA:5B:60:D1:35", true, "0DFF4C0016080102030405060708")
+	a := parseADFor(t, "5A:00:00:00:00:01", true, "0DFF4C0016080102030405060708")
 	if a.MfrKind != "CONTINUITY 16" {
 		t.Fatalf("unknown Apple TLV 0x16: mfrKind=%q, want CONTINUITY 16", a.MfrKind)
 	}
 	// A known message type still wins over an unknown one in the same advert.
-	a = parseADFor(t, "50:CA:5B:60:D1:35", true, "0EFF4C001C02AABB1005010203040A")
+	a = parseADFor(t, "5A:00:00:00:00:01", true, "0EFF4C001C02AABB1005010203040A")
 	if a.MfrKind != "NEARBY" {
 		t.Fatalf("Nearby + unknown 0x1C: mfrKind=%q, want NEARBY", a.MfrKind)
 	}
 }
 
 func TestCompanyIDThatIsTheOwnAddressIsIgnored(t *testing.T) {
-	// The device writes its own MAC (C4:A9:...) where the company id belongs.
-	a := parseADFor(t, "C4:A9:B8:4E:70:E2", false, "07FFC4A9B84E70E2")
+	// The device writes its own MAC (0A:BC:...) where the company id belongs.
+	a := parseADFor(t, "0A:BC:00:00:00:02", false, "07FF0ABC00000002")
 	if a.Company != -1 {
 		t.Fatalf("company = %04X, want -1 (it is the device's own address)", a.Company)
 	}
-	b := parseADFor(t, "C4:A9:B8:4E:70:E2", false, "05FF4C0010AA")
+	b := parseADFor(t, "0A:BC:00:00:00:02", false, "05FF4C0010AA")
 	if b.Company != 0x004C {
 		t.Fatalf("a real company id must be kept, got %04X", b.Company)
 	}
@@ -57,12 +57,12 @@ func TestBrandFromASCIIIn128BitUUID(t *testing.T) {
 
 func TestClassifyFallbacks(t *testing.T) {
 	// Member service UUID with no known meaning: say which service it is.
-	c := classifyBLE(bleClassIn{addr: "37:54:9E:C0:D4:B4", random: true, company: -1, appearV: -1, services: []int{0xFEF3}}, true)
+	c := classifyBLE(bleClassIn{addr: "37:00:00:00:00:03", random: true, company: -1, appearV: -1, services: []int{0xFEF3}}, true)
 	if c.brand != "GOOGLE" || c.typ != "SVC FEF3" {
 		t.Fatalf("FEF3: brand=%q type=%q, want GOOGLE / SVC FEF3", c.brand, c.typ)
 	}
 	// Audio SoC vendors almost only ship in earbuds and headphones.
-	c = classifyBLE(bleClassIn{addr: "00:68:82:8B:44:C1", company: 0x07E3, appearV: -1}, true)
+	c = classifyBLE(bleClassIn{addr: "02:00:00:00:00:04", company: 0x07E3, appearV: -1}, true)
 	if c.brand != "AIROHA" || c.typ != "AUDIO" {
 		t.Fatalf("Airoha: brand=%q type=%q, want AIROHA / AUDIO", c.brand, c.typ)
 	}
