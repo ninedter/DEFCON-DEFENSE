@@ -78,5 +78,6 @@ You are responsible for following local law and venue rules. The tools are your
 radar, not your armor: keep using a VPN and MAC randomization, and turn radios
 off when you're not using them.
 
-The Flipper Zero app is licensed under GPL-3.0 (see `flipper-zero/LICENSE`).
-Vendored third-party code keeps its own license files.
+This project is licensed under GPL-3.0 (see [`LICENSE`](LICENSE)). The Flipper
+Zero app carries its own copy in `flipper-zero/LICENSE`. Vendored third-party
+code keeps its own license files.
