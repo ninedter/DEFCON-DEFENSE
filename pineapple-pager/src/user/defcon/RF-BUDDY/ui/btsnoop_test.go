@@ -210,7 +210,7 @@ func TestAppleTLVKinds(t *testing.T) {
 		{"find my alone", []byte{0x12, 0x02, 0x00, 0x01}, "FIND MY"},
 		{"airpods beats find my", []byte{0x12, 0x01, 0x00, 0x07, 0x01, 0x00}, "AIRPODS"},
 		{"truncated tlv no panic", []byte{0x10, 0x01, 0xAA, 0x0C, 0x09}, "HANDOFF"},
-		{"unknown type", []byte{0x99, 0x00}, ""},
+		{"unknown type", []byte{0x99, 0x00}, "CONTINUITY 99"},
 		{"airplay", []byte{0x09, 0x01, 0x00}, "AIRPLAY"},
 	}
 	for _, tc := range tests {

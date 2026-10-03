@@ -178,6 +178,10 @@ func parseAD(ad []byte, a *Advert) {
 			kind, hint = "SMARTTAG", "SAMSUNG"
 		case 0xFEAA:
 			kind = "EDDYSTONE"
+			// Frame 0x40/0x41: Google Find Hub (Find My Device) network tag.
+			if len(data) >= 1 && (data[0] == 0x40 || data[0] == 0x41) {
+				kind, hint = "FIND HUB TAG", "GOOGLE"
+			}
 			if len(data) >= 1 && a.BeaconInfo == "" {
 				if f := eddystoneFrame(data[0]); f != "" {
 					a.BeaconInfo = "EDDYSTONE " + f
@@ -240,10 +244,25 @@ func parseAD(ad []byte, a *Advert) {
 			for i := 0; i+1 < len(d); i += 2 {
 				service(int(d[i])|int(d[i+1])<<8, nil)
 			}
+		case 0x06, 0x07, 0x21: // 128-bit service UUIDs / service data
+			n := len(d) / 16 * 16
+			if typ == 0x21 {
+				n = min(16, n)
+			}
+			for i := 0; i+16 <= n; i += 16 {
+				if b, _ := nameKeyword(uuidText(d[i : i+16])); b != "" && a.BrandHint == "" {
+					a.BrandHint = b
+				}
+			}
 		}
 	}
 	if a.Name == "" {
 		a.Name = short
+	}
+	// Some cheap audio devices write their own MAC where the company id
+	// belongs; that is not a company, so do not let it name the device.
+	if a.Company >= 0 && a.Company == addrPrefixLE(a.Addr) {
+		a.Company, mfr = -1, ""
 	}
 	if fastPair && a.Company < 0 && a.BrandHint == "" {
 		a.BrandHint = "GOOGLE"
@@ -337,7 +356,15 @@ func serviceKind(uuid int) string {
 func appleInfo(d []byte) (kind, model, beacon string) {
 	best := len(appleKinds)
 	beats := false
+	unknown := -1
 	for len(d) >= 2 {
+		known := false
+		for _, k := range appleKinds {
+			known = known || k.typ == d[0]
+		}
+		if !known && unknown < 0 {
+			unknown = int(d[0])
+		}
 		for i := 0; i < best; i++ {
 			if appleKinds[i].typ == d[0] {
 				best = i
@@ -359,6 +386,10 @@ func appleInfo(d []byte) (kind, model, beacon string) {
 		d = d[2+l:]
 	}
 	if best == len(appleKinds) {
+		if unknown >= 0 {
+			// A Continuity message type no public research documents yet.
+			return fmt.Sprintf("CONTINUITY %02X", unknown), model, beacon
+		}
 		return "", model, beacon
 	}
 	kind = appleKinds[best].kind
@@ -414,4 +445,39 @@ func CompanyName(id int) string {
 		return n
 	}
 	return fmt.Sprintf("ID %04X", id)
+}
+
+// uuidText returns the printable letter runs (4+ chars) of a 128-bit UUID
+// read in display order; vendors sometimes spell their name into it.
+func uuidText(u []byte) string {
+	var words []string
+	run := []byte{}
+	for i := len(u) - 1; i >= 0; i-- {
+		c := u[i]
+		if (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') {
+			run = append(run, c)
+			continue
+		}
+		if len(run) >= 4 {
+			words = append(words, string(run))
+		}
+		run = run[:0]
+	}
+	if len(run) >= 4 {
+		words = append(words, string(run))
+	}
+	return sanitize(strings.Join(words, " "))
+}
+
+// addrPrefixLE is the first two displayed address bytes as a little-endian
+// company id, or -1.
+func addrPrefixLE(addr string) int {
+	var b0, b1 int
+	if len(addr) < 5 || addr[2] != ':' {
+		return -1
+	}
+	if _, err := fmt.Sscanf(addr[:5], "%02X:%02X", &b0, &b1); err != nil {
+		return -1
+	}
+	return b0 | b1<<8
 }

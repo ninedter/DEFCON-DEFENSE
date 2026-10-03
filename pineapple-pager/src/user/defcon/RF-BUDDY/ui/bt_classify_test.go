@@ -110,7 +110,7 @@ func TestClassifyPrecedence(t *testing.T) {
 			brand: "FOOBAR", typ: "OTHER", addrK: "PRIVATE", label: "FOOBAR"},
 		{name: "hint when no other clue", addr: priv, random: true,
 			ads:   [][]byte{{0x03, 0x16, 0x9F, 0xFE}, mfr(0xB5B5, 1)},
-			brand: "GOOGLE", typ: "OTHER", addrK: "PRIVATE", label: "GOOGLE DEVICE"},
+			brand: "GOOGLE", typ: "SVC FE9F", addrK: "PRIVATE", label: "GOOGLE SVC FE9F"},
 		{name: "airpods pro 2 model", addr: priv, random: true,
 			ads:   [][]byte{apple(pods...)},
 			brand: "APPLE", typ: "AIRPODS", model: "AIRPODS PRO 2", addrK: "PRIVATE", label: "AIRPODS PRO 2"},
@@ -220,7 +220,11 @@ func TestAdvertServiceUUIDsCappedAndDeduped(t *testing.T) {
 func TestEddystoneFrames(t *testing.T) {
 	for b, want := range map[byte]string{0x00: "EDDYSTONE UID", 0x10: "EDDYSTONE URL", 0x20: "EDDYSTONE TLM", 0x30: "EDDYSTONE EID", 0x40: ""} {
 		a := parseOne(t, []byte{0x04, 0x16, 0xAA, 0xFE, b})
-		if a.BeaconInfo != want || a.Kind != "EDDYSTONE" {
+		kind := "EDDYSTONE"
+		if b == 0x40 { // Google Find Hub network frame
+			kind = "FIND HUB TAG"
+		}
+		if a.BeaconInfo != want || a.Kind != kind {
 			t.Errorf("%#x: %+v", b, a)
 		}
 	}

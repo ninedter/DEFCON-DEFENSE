@@ -152,7 +152,7 @@ func classifyBLE(in bleClassIn, useDB bool) bleClass {
 	case c.appear != "":
 		c.typ = c.appear
 	default:
-		c.typ = "OTHER"
+		c.typ = fallbackKind(c.brand, in.services, useDB)
 	}
 	if useDB {
 		for _, u := range in.services {
@@ -177,4 +177,43 @@ func warmBTDB() {
 	ServiceName(0)
 	AppearanceName(0x40)
 	OUIBrand("00:00:00")
+}
+
+// audioChipBrands make Bluetooth audio SoCs that ship almost only in earbuds,
+// headphones and speakers.
+var audioChipBrands = map[string]bool{"AIROHA": true, "BESTECHNIC": true, "JIELI": true, "BLUETRUM": true, "ACTIONS": true}
+
+// fallbackKind names devices that carry no explicit kind: the advertised
+// vendor service ("SVC FEF3") or a standard SIG service name, else an audio
+// chip vendor's usual product, else OTHER.
+func fallbackKind(brand string, services []int, useDB bool) string {
+	if useDB {
+		for _, u := range services {
+			if _, _, ok := MemberBrand(u); ok {
+				return fmt.Sprintf("SVC %04X", u)
+			}
+		}
+		for _, u := range services {
+			if genericService(u) {
+				continue
+			}
+			if n, ok := ServiceName(u); ok {
+				return trimCells(n, 16)
+			}
+		}
+	}
+	if audioChipBrands[brand] {
+		return "AUDIO"
+	}
+	return "OTHER"
+}
+
+// genericService reports SIG services nearly every device carries; they say
+// nothing about what the device is.
+func genericService(u int) bool {
+	switch u {
+	case 0x1800, 0x1801, 0x180A, 0x180F: // GAP, GATT, Device Information, Battery
+		return true
+	}
+	return false
 }
