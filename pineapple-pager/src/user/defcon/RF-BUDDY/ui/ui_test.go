@@ -313,10 +313,35 @@ func TestBTTickInterval(t *testing.T) {
 // Pager app (whose Power Menu does the graceful shutdown).
 func TestPowerExitsFromEveryScreen(t *testing.T) {
 	for _, sc := range []screen{screenProbe, screenFatal, screenOverview, screenLock, screenBT, screenBTTrack} {
-		u := newUI(&recordingController{}, nil, time.Now)
+		clock := newFakeClock()
+		u := newUI(&recordingController{}, nil, clock.Now)
 		u.screen = sc
-		if !u.HandleButton("POWER", Snapshot{}) {
-			t.Fatalf("screen %d: POWER did not exit", sc)
+		// A single press (a brushed button, a tap to wake the screen) must not
+		// quit; it only asks for confirmation.
+		if u.HandleButton("POWER", Snapshot{}) {
+			t.Fatalf("screen %d: a single POWER press exited", sc)
 		}
+		if u.toast != "PRESS POWER AGAIN TO EXIT" || u.screen != sc {
+			t.Fatalf("screen %d: toast %q screen %d after first press", sc, u.toast, u.screen)
+		}
+		clock.Advance(2 * time.Second)
+		if !u.HandleButton("POWER", Snapshot{}) {
+			t.Fatalf("screen %d: second POWER press within 3 s did not exit", sc)
+		}
+	}
+}
+
+func TestPowerConfirmationExpiresAndIsCancelled(t *testing.T) {
+	clock := newFakeClock()
+	u := newUI(&recordingController{}, nil, clock.Now)
+	u.screen = screenOverview
+	u.HandleButton("POWER", Snapshot{})
+	clock.Advance(4 * time.Second)
+	if u.HandleButton("POWER", Snapshot{}) {
+		t.Fatal("a second press after the 3 s window exited; it must re-arm instead")
+	}
+	u.HandleButton("LEFT", Snapshot{}) // any other button cancels
+	if u.HandleButton("POWER", Snapshot{}) {
+		t.Fatal("POWER after another button exited; the confirmation should have been cancelled")
 	}
 }

@@ -242,9 +242,10 @@ leaves storage mid-write; the Pager warns about it on the next boot and recent
 loot can be lost. A short press of the power button only turns the screen off.
 
 DEFCON Defense and RF-BUDDY take exclusive use of the Pager's buttons, power
-included, while they run. Pressing **power** in either one exits it cleanly and
-gives the button back to the Pager, so press power once to leave the payload,
-then open the Power Menu and choose Shutdown.
+included, while they run. Pressing **power twice** (within 3 seconds) in either
+one exits it cleanly and gives the button back to the Pager; then open the
+Power Menu and choose Shutdown. A single press only shows a reminder, so a
+brushed button cannot end a session.
 
 ## This is not a substitute for opsec
 

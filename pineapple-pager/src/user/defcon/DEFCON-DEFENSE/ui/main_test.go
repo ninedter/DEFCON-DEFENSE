@@ -690,13 +690,36 @@ func assertVerticalColor(t *testing.T, img *image.RGBA, x, y1, y2 int, want colo
 	}
 }
 
-// A power press exits from every screen, handing the button back to the stock
-// Pager app, whose Power Menu performs the graceful shutdown.
+// Two power presses exit from every screen, handing the button back to the
+// stock Pager app, whose Power Menu performs the graceful shutdown. One press
+// (a brushed button, a tap to wake the screen) only asks for confirmation.
 func TestPowerExitsFromEveryScreen(t *testing.T) {
 	for sc := screenGeneral; sc <= screenClearSession; sc++ {
 		a := &app{screen: sc, actionFile: filepath.Join(t.TempDir(), "ui_action.psv")}
-		if !a.handleButton("POWER", previewState()) {
-			t.Fatalf("screen %d: POWER did not exit", sc)
+		if a.handleButton("POWER", previewState()) {
+			t.Fatalf("screen %d: a single POWER press exited", sc)
 		}
+		if a.toast != "PRESS POWER AGAIN TO EXIT" || a.screen != sc {
+			t.Fatalf("screen %d: toast %q screen %d after first press", sc, a.toast, a.screen)
+		}
+		a.lastButtonAt = a.lastButtonAt.Add(-time.Second) // a real second press, not contact bounce
+		if !a.handleButton("POWER", previewState()) {
+			t.Fatalf("screen %d: second POWER press did not exit", sc)
+		}
+	}
+}
+
+func TestPowerConfirmationCancelledByOtherButton(t *testing.T) {
+	a := &app{screen: screenGeneral, actionFile: filepath.Join(t.TempDir(), "ui_action.psv")}
+	a.handleButton("POWER", previewState())
+	a.handleButton("DOWN", previewState())
+	a.lastButtonAt = a.lastButtonAt.Add(-time.Second)
+	if a.handleButton("POWER", previewState()) {
+		t.Fatal("POWER after another button exited; the confirmation should have been cancelled")
+	}
+	a.powerArmedUntil = time.Now().Add(-time.Millisecond) // window expired
+	a.lastButtonAt = a.lastButtonAt.Add(-time.Second)
+	if a.handleButton("POWER", previewState()) {
+		t.Fatal("POWER after the window expired exited; it must re-arm")
 	}
 }
