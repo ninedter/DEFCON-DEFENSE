@@ -64,7 +64,7 @@ RF-BUDDY gets its own menu category; DEFCON Defense is not moved and stays where
   normal hopping. Recon keeps running throughout.
 - Passive capture on `wlan1mon` delivers radiotap frames with TSFT, legacy rate,
   channel, dBm signal, and further fields (bit 22 present); the 802.11 retry flag is
-  readable. On channel 6 the office AP `NINEDTER` was heard at −67 dBm.
+  readable. On channel 6 the office AP was heard at −67 dBm.
 - `hcitool`, `hciconfig`, and `hci0` exist; `_pineap` is in `/usr/bin`. The buzzer is
   `/sys/class/leds/buzzer` (`frequency`, `volume`, `brightness`).
 
