@@ -19,8 +19,8 @@ func hx(t *testing.T, s string) []byte {
 }
 
 const (
-	realA = "3E 29 02 01 00 00 6E 8C EC EB 68 02 1D 02 01 06 19 16 F7 FD 01 36 7C 66 8B B3 8D 50 42 AC 83 3F 2F 32 33 12 E2 00 00 00 00 03 B3"
-	realB = "3E 2B 02 01 00 00 C5 0F CD BD 4D 74 1F 02 01 06 1B FF B5 B5 13 52 36 30 31 5A 41 42 37 58 46 43 54 30 39 32 38 63 00 01 00 00 3E 99 A6"
+	realA = "3E 29 02 01 00 00 EE DD CC BB AA 02 1D 02 01 06 19 16 F7 FD 01 36 7C 66 8B B3 8D 50 42 AC 83 3F 2F 32 33 12 E2 00 00 00 00 03 B3"
+	realB = "3E 2B 02 01 00 00 56 34 12 BD 4D 74 1F 02 01 06 1B FF B5 B5 13 58 30 30 30 53 41 4D 50 4C 45 30 30 30 30 30 31 63 00 01 00 00 3E 99 A6"
 )
 
 // legacy builds one legacy report entry; addr is reversed onto the wire.
@@ -57,8 +57,8 @@ func TestParseLEAdvertEvent(t *testing.T) {
 		pkt  []byte
 		want []Advert
 	}{
-		{"real A", hx(t, realA), []Advert{{Addr: "02:68:EB:EC:8C:6E", RSSI: -77, Company: -1, Appearance: -1, ServiceUUIDs: []int{0xFDF7}}}},
-		{"real B", hx(t, realB), []Advert{{Addr: "74:4D:BD:CD:0F:C5", RSSI: -90, Company: 0xB5B5, Appearance: -1}}},
+		{"real A", hx(t, realA), []Advert{{Addr: "02:AA:BB:CC:DD:EE", RSSI: -77, Company: -1, Appearance: -1, ServiceUUIDs: []int{0xFDF7}}}},
+		{"real B", hx(t, realB), []Advert{{Addr: "74:4D:BD:12:34:56", RSSI: -90, Company: 0xB5B5, Appearance: -1}}},
 		{"name+tx", legacyEvt(legacy(a1, 0, nano, -60)),
 			[]Advert{{Addr: "01:02:03:04:05:06", RSSI: -60, Name: "NANOLEAF STRIP FCE", TxPower: 12, HasTx: true, Company: -1, Appearance: -1}}},
 		{"airpods", legacyEvt(legacy(a1, 0, apple, -50)),

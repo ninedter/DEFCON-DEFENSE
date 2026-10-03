@@ -64,7 +64,7 @@ func TestBLEScannerSkipsHcidumpBanner(t *testing.T) {
 	stream = append(stream, record(3, append([]byte{0x04}, hx(t, realA)...))...)
 	s.consumeDump(bytes.NewReader(stream))
 	devs := s.Tracker.Devices(now)
-	if len(devs) != 1 || devs[0].Addr != "02:68:EB:EC:8C:6E" || devs[0].RSSI != -77 {
+	if len(devs) != 1 || devs[0].Addr != "02:AA:BB:CC:DD:EE" || devs[0].RSSI != -77 {
 		t.Fatalf("devices = %+v", devs)
 	}
 }

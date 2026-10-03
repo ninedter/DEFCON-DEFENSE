@@ -73,18 +73,18 @@ func TestLoggerBTMarkRow(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer l.Close()
-	if _, err := l.AddMark(Mark{At: logStart, BT: true, BTAddr: "74:4D:BD:CD:0F:C5", BTLabel: "NANO,LEAF\nSTRIP", RSSI: -55}); err != nil {
+	if _, err := l.AddMark(Mark{At: logStart, BT: true, BTAddr: "74:4D:BD:12:34:56", BTLabel: "NANO,LEAF\nSTRIP", RSSI: -55}); err != nil {
 		t.Fatal(err)
 	}
 	got := readFile(t, filepath.Join(l.Dir(), "marks.csv"))
-	if got != "mark,epoch,band,channel,score,likely\n1,1790858525,bt,74:4D:BD:CD:0F:C5,-55,NANOLEAF STRIP\n" {
+	if got != "mark,epoch,band,channel,score,likely\n1,1790858525,bt,74:4D:BD:12:34:56,-55,NANOLEAF STRIP\n" {
 		t.Fatalf("marks.csv = %q", got)
 	}
 	if _, err := l.AddMark(Mark{At: logStart, BT: true, BTAddr: "-1,\"A", BTLabel: "=1+1\"x,y\x01\x07", RSSI: -60}); err != nil {
 		t.Fatal(err)
 	}
 	got = readFile(t, filepath.Join(l.Dir(), "marks.csv"))
-	want := "mark,epoch,band,channel,score,likely\n1,1790858525,bt,74:4D:BD:CD:0F:C5,-55,NANOLEAF STRIP\n2,1790858525,bt,'-1A,-60,'=1+1xy\n"
+	want := "mark,epoch,band,channel,score,likely\n1,1790858525,bt,74:4D:BD:12:34:56,-55,NANOLEAF STRIP\n2,1790858525,bt,'-1A,-60,'=1+1xy\n"
 	if got != want {
 		t.Fatalf("marks.csv = %q, want %q", got, want)
 	}

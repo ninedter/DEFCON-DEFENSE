@@ -47,7 +47,7 @@ func previewSnapshot(now time.Time, stress bool) Snapshot {
 	for i := 0; i < lockHistoryLen; i++ {
 		lock.History = append(lock.History, 40+i*50/lockHistoryLen)
 	}
-	lock.Top = []Transmitter{{Addr: "70:A7:41:6C:00:2E", SSID: "NINEDTER", SignalDBm: -67}, {Addr: "02:68:EB:EC:0C:6E", SSID: "DIRECT-6E-HP M479fdw Color LJ", SignalDBm: -48}}
+	lock.Top = []Transmitter{{Addr: "AA:BB:CC:10:20:30", SSID: "OFFICE-WIFI", SignalDBm: -67}, {Addr: "AA:BB:CC:40:50:60", SSID: "DIRECT-4A-Lobby Printer", SignalDBm: -48}}
 	if stress {
 		lock.Score, lock.Raw, lock.Peak = 100, 100, 100
 		lock.Top = []Transmitter{{Addr: "AA:BB:CC:00:00:09", SSID: "THIS-IS-A-VERY-LONG-GUEST-NETWORK-NAME-FOR-CONTAINMENT", SignalDBm: -100}, {Addr: "AA:BB:CC:00:00:0A", SignalDBm: -99}}
